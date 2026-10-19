@@ -14,3 +14,13 @@ Example:
 C:\ai-game-studio\tools\make-skeleton-job.ps1
 C:\ai-game-studio\tools\blender-job.ps1 -Job C:\ai-game-studio-workspace\jobs\skeleton_stub.json -ApproveWrite
 ```
+
+## Automated tests
+
+Run the standard-library unit tests from the repository root with Python 3.12:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The suite does not require Ollama, Blender, or Unreal Engine. Blender adapter tests use temporary directories and a mocked process runner; repository runtime folders (`tasks/`, `results/`, `logs/`, and `state/`) remain ignored and are not used by the tests.
