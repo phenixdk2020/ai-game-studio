@@ -7,6 +7,9 @@ def ensure_state():
  for p in (ROOT/'tasks',R,ROOT/'logs',ROOT/'state'):p.mkdir(exist_ok=True)
 def log(m):ensure_state();print(m,flush=True);open(LOG,'a',encoding='utf-8').write(f'{datetime.datetime.now().isoformat(timespec="seconds")} {m}\n')
 def load():ensure_state();return json.loads(Q.read_text(encoding='utf-8-sig')) if Q.exists() else []
+def ready_tasks(rows):
+ statuses={x['id']:x['status'] for x in rows}
+ return [x for x in rows if x['status']=='queued' and all(statuses.get(d)=='done' for d in x.get('dependencies',[]))]
 def save(x):
  ensure_state()
  with write_lock:Q.write_text(json.dumps(x,ensure_ascii=False,indent=2),encoding='utf-8')
@@ -27,7 +30,7 @@ def run_task(t):
   p=R/(t['id']+'.md');p.write_text(out,encoding='utf-8');log(f'[DONE] {t["id"]} {secs}s -> {p}');return t['id'],'done',str(p),'',used
  except Exception as e:log(f'[FAIL] {t["id"]} {e}');return t['id'],'failed','',str(e),model
 def run_layer():
- rows=load();st={x['id']:x['status'] for x in rows};ready=[x for x in rows if x['status']=='queued' and all(st.get(d)=='done' for d in x.get('dependencies',[]))];log(f'[READY] {len(ready)} task(s)')
+ rows=load();ready=ready_tasks(rows);log(f'[READY] {len(ready)} task(s)')
  if not ready:return 0
  now=datetime.datetime.now().isoformat(timespec='seconds')
  for x in rows:

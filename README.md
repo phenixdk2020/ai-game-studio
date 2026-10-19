@@ -14,3 +14,17 @@ Example:
 C:\ai-game-studio\tools\make-skeleton-job.ps1
 C:\ai-game-studio\tools\blender-job.ps1 -Job C:\ai-game-studio-workspace\jobs\skeleton_stub.json -ApproveWrite
 ```
+
+## Automated tests
+
+Run the unit suite with Python 3.12 or newer from the repository root:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The tests cover studio configuration and model routing, task dependency readiness,
+UTF-8 queue loading (with and without a BOM), runtime-state isolation, and Blender
+job validation and write-approval enforcement. They do not require Blender,
+Unreal Engine, or an Ollama server; external execution is not performed by the
+unit suite. GitHub Actions runs the same suite on pushes and pull requests.
