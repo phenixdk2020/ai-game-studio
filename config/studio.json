@@ -1,8 +1,8 @@
 {
-  "project":"AI Game Studio 1864","version":"10.0","max_parallel_light":2,
+  "project":"AI Game Studio 1864","version":"11.0","max_parallel_light":2,
   "approval_required":["system_install","merge_to_main","delete_asset","release_build","write_blender_asset","write_unreal_asset"],
   "llm":{"base_url":"http://127.0.0.1:11434/v1","api_key":"local","timeout_seconds":600,
     "models":{"light":"qwen3.5-9b-gpu:latest","heavy":"qwen3.6:35b-a3b-coding"},
     "routing":{"historical_research":"light","character3d":"light","rigging":"light","animation":"light","art_world":"light","qa":"light","environment":"light","technical_research":"heavy","gameplay":"heavy","unreal":"heavy","integration":"heavy"}},
-  "paths":{"studio_root":"C:\\ai-game-studio","blender":"C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe","unreal_engine":"I:\\Spil\\Epic Games\\UE_5.7","unreal_project":""}
+  "paths":{"studio_root":"C:\\ai-game-studio","blender":"C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe","unreal_engine":"I:\\Spil\\Epic Games\\UE_5.7","unreal_project":"","workspace":"C:\\ai-game-studio-workspace"}
 }

@@ -1,5 +1,16 @@
-# AI Game Studio 1864 v10
+# AI Game Studio 1864 v11.0
 
-V10 is Git-first. Runtime state remains ignored/local. New tools: `tools/update.ps1` for safe fast-forward-only updates plus setup/status health checks, and `tools/release.ps1` for state-safe commit/push. V10 retains Ollama model routing, heavy-model serialization, crash recovery, Blender health and Unreal CLI health.
+Real V11 adds the first controlled Blender execution adapter.
 
-This update payload intentionally contains no tasks/results state.
+- Existing `tasks/`, `results/`, `logs/`, `state/` remain local and are not part of this update payload.
+- Blender jobs run headless and produce evidence logs in `C:\ai-game-studio-workspace\blender`.
+- Asset writes are denied by default. `--approve-write` / `-ApproveWrite` is required for a job declaring `write_asset=true`.
+- `make-skeleton-job.ps1` creates a starter humanoid skeleton job specification; `blender-job.ps1` executes it only with explicit write approval.
+- Git update/release scripts handle Git stderr without treating normal push/pull progress as a PowerShell failure.
+
+Example:
+
+```powershell
+C:\ai-game-studio\tools\make-skeleton-job.ps1
+C:\ai-game-studio\tools\blender-job.ps1 -Job C:\ai-game-studio-workspace\jobs\skeleton_stub.json -ApproveWrite
+```
