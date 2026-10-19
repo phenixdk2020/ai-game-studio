@@ -1,5 +1,5 @@
 {
-  "project":"AI Game Studio 1864","version":"9.0","max_parallel_light":2,
+  "project":"AI Game Studio 1864","version":"10.0","max_parallel_light":2,
   "approval_required":["system_install","merge_to_main","delete_asset","release_build","write_blender_asset","write_unreal_asset"],
   "llm":{"base_url":"http://127.0.0.1:11434/v1","api_key":"local","timeout_seconds":600,
     "models":{"light":"qwen3.5-9b-gpu:latest","heavy":"qwen3.6:35b-a3b-coding"},
