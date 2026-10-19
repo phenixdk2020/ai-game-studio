@@ -41,7 +41,7 @@ class RuntimeQueueTests(unittest.TestCase):
         ]
         self.assertEqual([task["id"] for task in studio.ready_tasks(rows)], ["technical", "ready"])
 
-    def _load_queue_text(self, text):
+    def _load_queue_text(self, text, expected):
         with tempfile.TemporaryDirectory() as temp:
             isolated_root = Path(temp)
             queue_path = isolated_root / "tasks" / "queue.json"
@@ -53,16 +53,18 @@ class RuntimeQueueTests(unittest.TestCase):
                 patch.object(studio, "R", isolated_root / "results"),
             ):
                 rows = studio.load()
-            self.assertEqual(rows, [{"id": "sample"}])
+            self.assertEqual(rows, expected)
             self.assertTrue((isolated_root / "results").is_dir())
             self.assertTrue((isolated_root / "logs").is_dir())
             self.assertTrue((isolated_root / "state").is_dir())
 
     def test_loads_utf8_queue(self):
-        self._load_queue_text('[{"id":"sample"}]')
+        expected = [{"id": "Éclairage", "name": "café"}]
+        self._load_queue_text(json.dumps(expected, ensure_ascii=False), expected)
 
     def test_loads_utf8_bom_queue(self):
-        self._load_queue_text('\ufeff[{"id":"sample"}]')
+        expected = [{"id": "Éclairage", "name": "café"}]
+        self._load_queue_text('\ufeff' + json.dumps(expected, ensure_ascii=False), expected)
 
     def test_protected_runtime_directories_are_not_tracked(self):
         result = subprocess.run(
