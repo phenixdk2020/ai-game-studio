@@ -1,0 +1,1 @@
+$exe='C:\Program Files\Blender Foundation\Blender 5.2\blender.exe';if(!(Test-Path $exe)){Write-Error 'Blender not found';exit 1};& $exe --background --factory-startup --python-expr "import bpy; print('AI_STUDIO_BLENDER_OK', bpy.app.version_string)";exit $LASTEXITCODE

@@ -1,0 +1,14 @@
+{
+  "computer": "ALIEN",
+  "python": "C:\\Users\\allan\\miniconda3\\python.exe",
+  "git": "C:\\Program Files\\Git\\cmd\\git.exe",
+  "pinokio": "C:\\Users\\allan\\AppData\\Local\\Programs\\Pinokio\\Pinokio.exe",
+  "blender": "C:\\Program Files\\Blender Foundation\\Blender 5.2\\blender.exe",
+  "dotnet": "C:\\Program Files\\dotnet\\dotnet.exe",
+  "visual_studio": "C:\\Program Files\\Microsoft Visual Studio\\18\\Community",
+  "unreal_engine": "I:\\Spil\\Epic Games\\UE_5.7",
+  "node": "C:\\Program Files\\nodejs\\node.exe",
+  "ffmpeg": "C:\\Users\\allan\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-7.1-full_build\\bin\\ffmpeg.exe",
+  "gpu_current": "NVIDIA GeForce RTX 3070 Ti",
+  "gpu_planned": "NVIDIA GeForce RTX 5060 Ti 16 GB"
+}

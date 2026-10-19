@@ -1,0 +1,20 @@
+# AI Game Studio runtime state - NEVER commit
+tasks/
+results/
+logs/
+state/
+state-backup-*/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local configuration / secrets
+.env
+*.local.json
+
+# Temporary / editor
+*.tmp
+*.bak
+.vscode/
+.idea/
