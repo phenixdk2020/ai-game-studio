@@ -1,10 +1,17 @@
 ﻿param(
     [string]$Root = 'C:\ai-game-studio',
-    [switch]$Once
+    [switch]$Once,
+    [switch]$ProcessAssets,
+    [switch]$ApproveBlenderWrite,
+    [switch]$ApproveUnrealWrite,
+    [string]$Python = 'python',
+    [string]$AssetConfig = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Hunyuan.Response.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Queue.psm1') -Force
+if (-not $AssetConfig) { $AssetConfig = Join-Path $Root 'config\asset-pipeline.json' }
 
 $queuePath = Join-Path $Root 'tasks\queue.gui.json'
 $logDirectory = Join-Path $Root 'logs'
@@ -42,39 +49,54 @@ function Set-TaskProperty {
 }
 
 function Read-Queue {
-    $raw = [System.IO.File]::ReadAllText($queuePath, $utf8)
-    if ([string]::IsNullOrWhiteSpace($raw)) {
-        return @()
-    }
-
-    $parsed = $raw | ConvertFrom-Json
-    if ($null -ne $parsed.value) {
-        return @($parsed.value | Where-Object { $null -ne $_ })
-    }
-
-    return @($parsed | Where-Object { $null -ne $_ })
+    Read-StudioQueue -Path $queuePath
 }
 
 function Write-Queue {
     param([array]$Items)
+    Write-StudioQueue -Path $queuePath -Items $Items
+}
 
-    $cleanItems = @($Items | Where-Object { $null -ne $_ })
-    $temporaryPath = "$queuePath.tmp"
-
-    if ($cleanItems.Count -eq 0) {
-        $json = '[]'
+function Invoke-AssetStages {
+    param($Task, [array]$Queue)
+    Set-TaskProperty $Task 'error' ''
+    if (-not $ApproveBlenderWrite) {
+        Set-TaskProperty $Task 'status' 'WaitingForApproval'
+        Set-TaskProperty $Task 'question' 'Blender asset writes require -ApproveBlenderWrite; requeue as QueuedForBlender after approval.'
+        Write-Queue -Items $Queue
+        return
     }
-    else {
-        $jsonItems = @(
-            $cleanItems | ForEach-Object {
-                $_ | ConvertTo-Json -Depth 30 -Compress
-            }
-        )
-        $json = '[' + ($jsonItems -join ',') + ']'
+    if ($Task.id -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$') { throw 'Invalid task id.' }
+    $taskDirectory = Join-Path $jobRoot $Task.id
+    $job = @{
+        schemaVersion = 1; taskId = $Task.id; asset_name = 'SM_Prop'
+        input = $Task.hunyuanOutput; pivot = 'bottom'
+        project = $Task.projectPath
     }
-
-    [System.IO.File]::WriteAllText($temporaryPath, $json, $utf8)
-    Move-Item -Path $temporaryPath -Destination $queuePath -Force
+    foreach ($name in @('asset_name', 'target_size_m', 'rotation_x_degrees', 'pivot')) {
+        if ($Task.PSObject.Properties.Name -contains $name) { $job[$name] = $Task.$name }
+    }
+    $jobPath = Join-Path $taskDirectory 'asset-job.json'
+    [IO.File]::WriteAllText($jobPath, ($job | ConvertTo-Json -Depth 10), $utf8)
+    Set-TaskProperty $Task 'status' 'Running'
+    Set-TaskProperty $Task 'pipelineStage' 'blender-cleanup'
+    Set-TaskProperty $Task 'workerVersion' '17.0'
+    Write-Queue -Items $Queue
+    $arguments = @((Join-Path $Root 'adapters\asset_pipeline.py'), $jobPath,
+        '--config', $AssetConfig, '--approve-blender', '--resume')
+    if ($ApproveUnrealWrite) { $arguments += @('--target', 'unreal', '--approve-unreal') }
+    $resultLines = @(& $Python @arguments)
+    if ($LASTEXITCODE -ne 0) { throw 'Asset pipeline failed. See asset-manifest.json and per-attempt logs.' }
+    $result = ($resultLines -join "`n") | ConvertFrom-Json
+    Set-TaskProperty $Task 'status' $result.status
+    Set-TaskProperty $Task 'pipelineStage' $result.stage
+    Set-TaskProperty $Task 'resultPath' $result.outputDirectory
+    Set-TaskProperty $Task 'qaStatus' $result.qaStatus
+    Set-TaskProperty $Task 'progressPercent' $(if ($result.status -eq 'ReadyForUnrealQA') { 90 } else { 80 })
+    Set-TaskProperty $Task 'assetManifest' (Join-Path $taskDirectory 'asset-manifest.json')
+    Set-TaskProperty $Task 'question' 'Asset stages finished; Unreal QA, test level and screenshot remain pending.'
+    Set-TaskProperty $Task 'updatedAt' ([DateTime]::Now.ToString('o'))
+    Write-Queue -Items $Queue
 }
 
 function Test-Is3DTask {
@@ -308,18 +330,18 @@ function Invoke-HunyuanGeneration {
     }
 
     Update-TaskProgress -Task $Task -Queue $Queue `
-        -Progress 'Hunyuan model generation completed.' -Percent 100
+        -Progress 'Hunyuan model generation completed; Blender and QA are pending.' -Percent 60
 
     return $outputFile
 }
 
-Write-WorkerLog -Message 'Pipeline worker v16.2 HUNYUAN AUTO POLLING started'
-
+$workerLock = Enter-StudioWorkerLock -Path ($queuePath + '.worker.lock') -Version '17.0'
 try {
+    Write-WorkerLog -Message 'Pipeline worker v17.0 started'
     while ($true) {
         $queue = @(Read-Queue)
         $task = $queue |
-            Where-Object { $_.status -eq 'Queued' } |
+            Where-Object { $_.status -eq 'Queued' -or ($ProcessAssets -and ($_.status -eq 'QueuedForBlender' -or ($ApproveUnrealWrite -and $_.status -eq 'ReadyForUnreal'))) } |
             Sort-Object priority, createdAt |
             Select-Object -First 1
 
@@ -341,6 +363,13 @@ try {
         }
 
         try {
+            Set-TaskProperty $task 'workerVersion' '17.0'
+            if ($ProcessAssets -and ($task.status -in @('QueuedForBlender', 'ReadyForUnreal') -or
+                ($task.hunyuanOutput -and (Test-Path -LiteralPath $task.hunyuanOutput)))) {
+                Invoke-AssetStages -Task $task -Queue $queue
+                if ($Once) { break }
+                continue
+            }
             Set-TaskProperty -Task $task -Name 'agent' -Value 'pinokio-hunyuan3d-agent'
             Set-TaskProperty -Task $task -Name 'pipeline' -Value 'asset3d'
             Set-TaskProperty -Task $task -Name 'pipelineStage' `
@@ -377,12 +406,13 @@ try {
                 -Value ([DateTime]::Now.ToString('o'))
             Write-Queue -Items $queue
             Write-WorkerLog -Message "$($task.id): generated $outputFile"
+            if ($ProcessAssets) { Invoke-AssetStages -Task $task -Queue $queue }
         }
         catch {
             Set-TaskProperty -Task $task -Name 'status' -Value 'Failed'
             Set-TaskProperty -Task $task -Name 'error' -Value $_.Exception.Message
             Set-TaskProperty -Task $task -Name 'question' `
-                -Value 'Hunyuan automation failed. Open the worker log for details.'
+                -Value 'Asset automation failed. Open the worker log and asset manifest for details.'
             Set-TaskProperty -Task $task -Name 'updatedAt' `
                 -Value ([DateTime]::Now.ToString('o'))
             Write-Queue -Items $queue
@@ -397,5 +427,6 @@ try {
     }
 }
 finally {
-    Write-WorkerLog -Message 'Pipeline worker v16.2 stopped'
+    $workerLock.Dispose()
+    Write-WorkerLog -Message 'Pipeline worker v17.0 stopped'
 }

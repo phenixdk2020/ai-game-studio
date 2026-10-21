@@ -1,5 +1,13 @@
 # AI Game Studio 1864 v11.0
 
+## Prop pipeline development
+
+The opt-in worker asset pipeline adds Blender prop cleanup/export, three previews,
+structured QA, and an Unreal StaticMesh import adapter. See
+[setup, approvals, local validation and remaining M1 work](docs/PROP-PIPELINE.md).
+Real Blender/Unreal integration evidence is still required. The existing v11
+skeleton job workflow below remains available.
+
 Real V11 adds the first controlled Blender execution adapter.
 
 - Existing `tasks/`, `results/`, `logs/`, `state/` remain local and are not part of this update payload.

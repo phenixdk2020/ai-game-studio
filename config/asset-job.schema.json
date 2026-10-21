@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AI Game Studio prop processing job",
+  "type": "object",
+  "required": ["schemaVersion", "taskId", "asset_name", "input"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "taskId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"},
+    "asset_name": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$"},
+    "input": {"type": "string", "minLength": 1},
+    "target_size_m": {"type": ["number", "null"], "minimum": 0.001, "maximum": 1000},
+    "rotation_x_degrees": {"type": "number", "minimum": -360, "maximum": 360, "default": 0},
+    "pivot": {"enum": ["bottom", "center"], "default": "bottom"},
+    "project": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

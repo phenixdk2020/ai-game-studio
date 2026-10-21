@@ -4,6 +4,7 @@ results/
 logs/
 state/
 state-backup-*/
+data/pipeline-jobs/
 
 # Python
 __pycache__/
