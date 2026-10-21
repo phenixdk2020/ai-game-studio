@@ -15,11 +15,13 @@ Blender or Unreal execution has been performed by this coding agent. M1 is pendi
 | P0-026 | Three orthographic CPU-rendered PNG previews | Visual inspection on a real mesh |
 | P0-030/031 | QA JSON/Markdown with thresholds and an import gate | Artistic/visual quality, normal direction, scale against references |
 | P0-040/041 | Allowed project roots, unambiguous .uproject, explicit plugins, automated FBX StaticMesh import, dependency save, fresh namespace | Actual Unreal 5.7 integration run |
-| P0-042 | Requests automatic collision and imports materials/textures | Collision/LOD verification, Nanite policy, texture fidelity |
+| P0-042 | Requests automatic collision; Unreal QA checks saved collision, LOD count, UV, materials and triangle budget | Actual collision behavior, additional LOD generation, Nanite policy and texture fidelity |
+| P0-043 | Optional separate QA commandlet creates/saves isolated test map, spawns imported mesh, and exports offscreen PNG with a nonuniform-pixel check | Real Unreal run and operator visual review |
 | P0-044 | Worker returns status, resultPath, qaStatus and manifest path to queue | Dedicated GUI preview/output controls |
 
 Automatic remediation, async Hunyuan, multiview, texture generation, character work,
-full state machine, dependency graph, test levels and screenshots are not implemented.
+full state machine and dependency graph are not implemented. Unreal test-map and
+screenshot adapters are implemented but have not been run against the real engine.
 
 ## Configuration
 
@@ -74,6 +76,12 @@ python adapters/asset_pipeline.py asset-job.json --approve-blender
 
 # Reuse verified Blender outputs, then import to the configured Unreal project.
 python adapters/asset_pipeline.py asset-job.json --approve-blender --approve-unreal --target unreal --resume
+
+# Reload saved assets, run Unreal QA, and create/save a fresh test map.
+python adapters/asset_pipeline.py asset-job.json --approve-blender --approve-unreal --target unreal-qa --resume
+
+# Also render an Unreal scene preview. Requires a functioning graphics renderer.
+python adapters/asset_pipeline.py asset-job.json --approve-blender --approve-unreal --target unreal-qa --capture --resume
 ```
 
 Use the worker bridge after stopping older workers; it cannot lock out old versions:
@@ -83,15 +91,22 @@ powershell -NoProfile -File tools/project-manager-worker.ps1 -Once -ProcessAsset
 
 # Both external asset write stages approved for this invocation.
 powershell -NoProfile -File tools/project-manager-worker.ps1 -Once -ProcessAssets -ApproveBlenderWrite -ApproveUnrealWrite
+
+# Include Unreal QA, isolated test map, and offscreen preview.
+powershell -NoProfile -File tools/project-manager-worker.ps1 -Once -ProcessAssets -ApproveBlenderWrite -ApproveUnrealWrite -ValidateUnreal -CaptureUnrealPreview
 ```
 
-`-Python` chooses the Python executable; `-AssetConfig` selects the pipeline config.
+`-ValidateUnreal` enables Unreal QA and test-map creation; `-CaptureUnrealPreview`
+also requests offscreen rendering. Both require `-ProcessAssets` and
+`-ApproveUnrealWrite`. `-Python` chooses the Python executable; `-AssetConfig` selects the pipeline config.
 `-ProcessAssets` is opt-in. Without `-ApproveBlenderWrite`, the bridge records
 `WaitingForApproval` and launches no asset tool. The operator then restores
 `QueuedForBlender` and restarts with the approval flag. The flags express the existing
 asset-write policy; they are not a GUI approval workflow.
 
 The worker processes `QueuedForBlender` and, with Unreal approval, `ReadyForUnreal`.
+With Unreal validation enabled it also processes `ReadyForUnrealQA`; with capture
+enabled it processes `AwaitingScreenshot`.
 A task retried as `Queued` with an existing `hunyuanOutput` resumes asset processing
 when `-ProcessAssets` is active. To regenerate changed references, use a new task ID;
 the old output is protected. Optional task properties `asset_name`, `target_size_m`,
@@ -112,7 +127,10 @@ are written atomically and include the source checksum, output checksums and sta
 `--resume` reuses a completed Blender stage only when job, input, configuration,
 adapter source fingerprint and all recorded artifact checksums match. Corrupted
 artifacts block reuse. A failed Blender/QA attempt creates a fresh directory on retry.
-A failed Unreal stage can reuse the validated Blender result.
+A failed Unreal stage can reuse the validated Blender result. A failed Unreal
+validation stage can also reuse the successful import instead of creating another
+asset import. QA retries get a fresh map/report/image ID. Resume verifies recorded
+evidence files; it does not detect external edits to Unreal .uasset packages.
 
 QA failure blocks Unreal import. Non-manifold geometry and a soft triangle budget
 violation are warnings; missing UV/materials/textures and hard triangle budget
@@ -120,8 +138,25 @@ violations fail by default. Policy is configurable. Normals are recalculated but
 their direction is not independently verified by QA.
 
 Successful Blender processing returns `ReadyForUnreal`. Successful import returns
-`ReadyForUnrealQA`, never `Completed`. Test-level, screenshot, collision/LOD checks
-and GUI preview acceptance are still required for M1. Preview PNG signature and GLB
+`ReadyForUnrealQA`. With `--target unreal-qa`, saved StaticMeshes are reloaded in a
+separate commandlet; geometry, UV, material slots, simple/convex collision and LOD
+count are checked against `unreal_qa` configuration. Negative API results fail.
+Default minimum LOD count is 1 (LOD0); this does not imply generated distance LODs.
+After QA, a fresh map is saved under the assigned import namespace with spawned
+mesh actors and dynamic lighting. An existing test map is never overwritten.
+
+Without rendering, status is `AwaitingScreenshot`. With `--capture`, the validation
+commandlet uses `-AllowCommandletRendering -RenderOffscreen` instead of `-nullrhi`.
+A SceneCapture2D exports a 640x640 PNG. Empty/uniform pixel data, missing files and
+non-PNG output fail the stage; render targets and transient capture actors are
+released even on failure. The actor remains in the saved test map, but the capture
+actor is transient and is not saved. Shader/render startup problems may require a
+local retry; offscreen engine compatibility is not yet established.
+
+Successful capture returns `AwaitingVisualReview`, never `Completed`. A pipeline
+preview proves that rendering returned nonuniform data, not that the asset looks
+correct. Local integration evidence and operator visual acceptance remain required
+for M1. Preview PNG signature and GLB
 structure checks are not a substitute for visual inspection or opening assets.
 
 Unreal imports get a fresh namespace under `/Game/AIStudio/<task>/<Import_uuid>`.
@@ -156,3 +191,10 @@ Implementation references:
 - [Blender export operators](https://docs.blender.org/api/5.0/bpy.ops.export_scene.html)
 - [Unreal 5.7 AssetImportTask](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/AssetImportTask?application_version=5.7)
 - [Unreal 5.7 FbxImportUI](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/FbxImportUI?application_version=5.7)
+
+Additional Unreal QA API references:
+
+- [StaticMeshEditorSubsystem](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/StaticMeshEditorSubsystem?application_version=5.7)
+- [LevelEditorSubsystem](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/LevelEditorSubsystem?application_version=5.7)
+- [RenderingLibrary](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/RenderingLibrary?application_version=5.7)
+- [SceneCaptureComponent2D](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/SceneCaptureComponent2D?application_version=5.7)

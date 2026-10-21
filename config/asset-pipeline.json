@@ -7,6 +7,13 @@
   "allowed_project_roots": ["R:\\Onedrive\\Unreal\\NinjaFrog"],
   "blender_timeout": 1800,
   "unreal_timeout": 1800,
+  "unreal_qa": {
+    "minimum_lods": 1,
+    "triangle_limit": 150000,
+    "require_collision": true,
+    "require_uv": true,
+    "require_materials": true
+  },
   "qa": {
     "triangle_warning": 60000,
     "triangle_limit": 150000,

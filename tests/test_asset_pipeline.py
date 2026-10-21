@@ -170,6 +170,68 @@ class AssetPipelineTests(unittest.TestCase):
         pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
                      target="unreal", resume=True, runner=lambda *a, **k: self.fail("completed stages rerun"))
 
+    def fake_full_pipeline(self, *, fail_qa=False, missing_screenshot=False):
+        def runner(args, **kwargs):
+            if "--python" in args:
+                return self.fake_blender(args, **kwargs)
+            self.calls.append((args, kwargs))
+            env = kwargs["env"]
+            if "AI_STUDIO_UNREAL_VALIDATION_JOB" in env:
+                job = pipeline.read_json(env["AI_STUDIO_UNREAL_VALIDATION_JOB"])
+                report = {"status": "failed" if fail_qa else "validated", "levelPath": job["level_path"],
+                          "spawnedActors": 1, "meshes": [{"status": "pass", "path": job["mesh_paths"][0]}]}
+                if job["capture"] and not missing_screenshot:
+                    Path(job["screenshot"]).write_bytes(b"\x89PNG\r\n\x1a\nmock PNG")
+                    report["screenshot"] = job["screenshot"]
+                pipeline.write_json(job["report"], report)
+            else:
+                job = pipeline.read_json(env["AI_STUDIO_UNREAL_JOB"])
+                pipeline.write_json(job["report"], {"status": "imported",
+                    "staticMeshPaths": [job["destination"] + "/SM_Sword.SM_Sword"]})
+            return SimpleNamespace(returncode=0)
+        return runner
+
+    def test_unreal_qa_scene_and_optional_rendering(self):
+        self.project()
+        runner = self.fake_full_pipeline()
+        result = pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                              target="unreal-qa", runner=runner)
+        self.assertEqual(result["status"], "AwaitingScreenshot")
+        self.assertIn("-nullrhi", self.calls[-1][0])
+        result = pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                              target="unreal-qa", capture=True, resume=True, runner=runner)
+        self.assertEqual(result["status"], "AwaitingVisualReview")
+        self.assertIn("-AllowCommandletRendering", self.calls[-1][0])
+        self.assertIn("-RenderOffscreen", self.calls[-1][0])
+        self.assertNotIn("-nullrhi", self.calls[-1][0])
+        self.assertEqual(len(self.calls), 4)  # Blender, import, QA without render, QA with render.
+        pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                     target="unreal-qa", capture=True, resume=True,
+                     runner=lambda *a, **k: self.fail("Validated capture was rerun"))
+
+    def test_failed_unreal_qa_can_resume_without_reimport(self):
+        self.project()
+        with self.assertRaisesRegex(RuntimeError, "QA report"):
+            pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                         target="unreal-qa", runner=self.fake_full_pipeline(fail_qa=True))
+        self.assertEqual(len(self.calls), 3)
+        recovered = pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                                 target="unreal-qa", resume=True, runner=self.fake_full_pipeline())
+        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(recovered["status"], "AwaitingScreenshot")
+        self.assertNotIn("error", recovered)
+
+    def test_requested_screenshot_is_required(self):
+        self.project()
+        with self.assertRaisesRegex(RuntimeError, "screenshot"):
+            pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
+                         target="unreal-qa", capture=True, runner=self.fake_full_pipeline(missing_screenshot=True))
+        self.assertEqual(pipeline.read_json(self.task_root / "asset-manifest.json")["status"], "Failed")
+
+    def test_capture_requires_qa_target(self):
+        with self.assertRaisesRegex(ValueError, "target unreal-qa"):
+            pipeline.run(self.job, self.config, approve_blender=True, capture=True)
+
     def test_paths_and_bad_options(self):
         cases = [{"taskId": "../escape"}, {"asset_name": "bad/name"}, {"input": "../outside.glb"},
                  {"pivot": "unknown"}, {"target_size_m": float("nan")}, {"target_size_m": True},

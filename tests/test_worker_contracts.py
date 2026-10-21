@@ -114,6 +114,10 @@ function Fake-Python {
     if ($args -notcontains '--approve-blender' -or $args -notcontains '--resume') { throw 'Missing stage arguments' }
     if ($args -notcontains '--approve-unreal') { throw 'Unreal approval missing' }
     $global:LASTEXITCODE = 0
+    if ($CaptureUnrealPreview) {
+        if ($args -notcontains 'unreal-qa' -or $args -notcontains '--capture') { throw 'Missing capture options' }
+        return '{"status":"AwaitingVisualReview","stage":"visual-review","outputDirectory":"mock-output","qaStatus":"pass"}'
+    }
     return '{"status":"ReadyForUnrealQA","stage":"unreal-qa","outputDirectory":"mock-output","qaStatus":"pass"}'
 }
 $Root = '__TEMP__'; $jobRoot = $Root; $Python = 'Fake-Python'; $AssetConfig = 'config.json'
@@ -129,6 +133,9 @@ Invoke-AssetStages -Task $task -Queue @($task)
 if ($task.status -ne 'ReadyForUnrealQA' -or $task.progressPercent -ne 90) { throw 'Wrong task result' }
 $job = Get-Content (Join-Path $Root 'TASK-1/asset-job.json') -Raw | ConvertFrom-Json
 if ($job.target_size_m -ne 1.0) { throw 'Task scale was dropped' }
+$ValidateUnreal = $true; $CaptureUnrealPreview = $true
+Invoke-AssetStages -Task $task -Queue @($task)
+if ($task.status -ne 'AwaitingVisualReview' -or $task.progressPercent -ne 98) { throw 'Wrong capture result' }
 '''
             self.execute(source.replace("__WORKER__", str(ROOT / "tools" / "project-manager-worker.ps1"))
                          .replace("__TEMP__", folder))

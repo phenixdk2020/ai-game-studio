@@ -4,6 +4,8 @@
     [switch]$ProcessAssets,
     [switch]$ApproveBlenderWrite,
     [switch]$ApproveUnrealWrite,
+    [switch]$ValidateUnreal,
+    [switch]$CaptureUnrealPreview,
     [string]$Python = 'python',
     [string]$AssetConfig = ''
 )
@@ -12,6 +14,9 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Hunyuan.Response.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Queue.psm1') -Force
 if (-not $AssetConfig) { $AssetConfig = Join-Path $Root 'config\asset-pipeline.json' }
+if (($ValidateUnreal -or $CaptureUnrealPreview) -and (-not $ProcessAssets -or -not $ApproveUnrealWrite)) {
+    throw 'Unreal validation/capture requires -ProcessAssets and -ApproveUnrealWrite.'
+}
 
 $queuePath = Join-Path $Root 'tasks\queue.gui.json'
 $logDirectory = Join-Path $Root 'logs'
@@ -84,7 +89,11 @@ function Invoke-AssetStages {
     Write-Queue -Items $Queue
     $arguments = @((Join-Path $Root 'adapters\asset_pipeline.py'), $jobPath,
         '--config', $AssetConfig, '--approve-blender', '--resume')
-    if ($ApproveUnrealWrite) { $arguments += @('--target', 'unreal', '--approve-unreal') }
+    if ($ApproveUnrealWrite) {
+        $target = if ($ValidateUnreal -or $CaptureUnrealPreview) { 'unreal-qa' } else { 'unreal' }
+        $arguments += @('--target', $target, '--approve-unreal')
+        if ($CaptureUnrealPreview) { $arguments += '--capture' }
+    }
     $resultLines = @(& $Python @arguments)
     if ($LASTEXITCODE -ne 0) { throw 'Asset pipeline failed. See asset-manifest.json and per-attempt logs.' }
     $result = ($resultLines -join "`n") | ConvertFrom-Json
@@ -92,9 +101,9 @@ function Invoke-AssetStages {
     Set-TaskProperty $Task 'pipelineStage' $result.stage
     Set-TaskProperty $Task 'resultPath' $result.outputDirectory
     Set-TaskProperty $Task 'qaStatus' $result.qaStatus
-    Set-TaskProperty $Task 'progressPercent' $(if ($result.status -eq 'ReadyForUnrealQA') { 90 } else { 80 })
+    Set-TaskProperty $Task 'progressPercent' $(if ($result.status -eq 'AwaitingVisualReview') { 98 } elseif ($result.status -eq 'AwaitingScreenshot') { 95 } elseif ($result.status -eq 'ReadyForUnrealQA') { 90 } else { 80 })
     Set-TaskProperty $Task 'assetManifest' (Join-Path $taskDirectory 'asset-manifest.json')
-    Set-TaskProperty $Task 'question' 'Asset stages finished; Unreal QA, test level and screenshot remain pending.'
+    Set-TaskProperty $Task 'question' $(if ($result.status -eq 'AwaitingVisualReview') { 'Unreal QA, test map and preview recorded; operator visual review remains.' } elseif ($result.status -eq 'AwaitingScreenshot') { 'Unreal QA and test map recorded; screenshot and operator review remain.' } else { 'Asset stages finished; Unreal QA, test level and screenshot remain pending.' })
     Set-TaskProperty $Task 'updatedAt' ([DateTime]::Now.ToString('o'))
     Write-Queue -Items $Queue
 }
@@ -341,7 +350,7 @@ try {
     while ($true) {
         $queue = @(Read-Queue)
         $task = $queue |
-            Where-Object { $_.status -eq 'Queued' -or ($ProcessAssets -and ($_.status -eq 'QueuedForBlender' -or ($ApproveUnrealWrite -and $_.status -eq 'ReadyForUnreal'))) } |
+            Where-Object { $_.status -eq 'Queued' -or ($ProcessAssets -and ($_.status -eq 'QueuedForBlender' -or ($ApproveUnrealWrite -and ($_.status -eq 'ReadyForUnreal' -or (($ValidateUnreal -or $CaptureUnrealPreview) -and $_.status -eq 'ReadyForUnrealQA') -or ($CaptureUnrealPreview -and $_.status -eq 'AwaitingScreenshot'))))) } |
             Sort-Object priority, createdAt |
             Select-Object -First 1
 
@@ -364,7 +373,7 @@ try {
 
         try {
             Set-TaskProperty $task 'workerVersion' '17.0'
-            if ($ProcessAssets -and ($task.status -in @('QueuedForBlender', 'ReadyForUnreal') -or
+            if ($ProcessAssets -and ($task.status -in @('QueuedForBlender', 'ReadyForUnreal', 'ReadyForUnrealQA', 'AwaitingScreenshot') -or
                 ($task.hunyuanOutput -and (Test-Path -LiteralPath $task.hunyuanOutput)))) {
                 Invoke-AssetStages -Task $task -Queue $queue
                 if ($Once) { break }

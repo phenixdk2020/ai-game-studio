@@ -14,6 +14,7 @@ import sys
 import uuid
 
 from asset_qa import evaluate, markdown, validate_profile
+from unreal_validation_runtime import validate_policy as validate_unreal_policy
 
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
@@ -95,6 +96,7 @@ def validate_job(job, config):
         if type(config.get(key, default)) is not int or config.get(key, default) < 1:
             raise ValueError(f"Invalid configuration: {key}")
     validate_profile(config.get("qa"))
+    validate_unreal_policy(config.get("unreal_qa"))
     if "schemaVersion" in config and (type(config["schemaVersion"]) is not int or config["schemaVersion"] != 1):
         raise ValueError("Unsupported pipeline configuration schemaVersion")
     if not isinstance(job, dict) or type(job.get("schemaVersion")) is not int or job["schemaVersion"] != 1:
@@ -213,22 +215,25 @@ def artifacts(directory, names):
 def fingerprint(job, config):
     payload = {"job": job, "config": config, "inputSha256": sha256(job["input"]),
                "code": {name: sha256(HERE / name) for name in (
-                   "asset_pipeline.py", "asset_qa.py", "blender_asset_runtime.py", "unreal_asset_runtime.py")}}
+                   "asset_pipeline.py", "asset_qa.py", "blender_asset_runtime.py", "unreal_asset_runtime.py",
+                   "unreal_validation_runtime.py")}}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def run(job, config, *, approve_blender=False, approve_unreal=False, target="blender", resume=False,
-        runner=subprocess.run):
-    if target not in ("blender", "unreal"):
+        capture=False, runner=subprocess.run):
+    if target not in ("blender", "unreal", "unreal-qa"):
         raise ValueError("Invalid target")
+    if type(capture) is not bool or (capture and target != "unreal-qa"):
+        raise ValueError("Screenshot capture requires target unreal-qa")
     normalized = validate_job(job, config)
     if not approve_blender:
         raise PermissionError("Approval required: write_blender_asset (--approve-blender)")
-    if target == "unreal" and not approve_unreal:
+    if target != "blender" and not approve_unreal:
         raise PermissionError("Approval required: write_unreal_asset (--approve-unreal)")
     blender = tool_path(config, "blender_executable")
     project = None
-    if target == "unreal":
+    if target != "blender":
         project = find_project(normalized.get("project") or "", config.get("allowed_project_roots", []))
         unreal_editor = tool_path(config, "unreal_executable")
     root = Path(normalized["task_root"])
@@ -243,7 +248,11 @@ def run(job, config, *, approve_blender=False, approve_unreal=False, target="ble
             report = evaluate(read_json(output / "metrics.json"), config.get("qa"))
             if report["status"] == "fail":
                 raise RuntimeError("Cannot resume failed QA")
-            if previous.get("status") == "ReadyForUnrealQA":
+            if previous.get("status") in ("ReadyForUnrealQA", "AwaitingScreenshot", "AwaitingVisualReview") and target != "unreal-qa":
+                return previous
+            if target == "unreal-qa" and (previous.get("status") == "AwaitingVisualReview" or (
+                previous.get("status") == "AwaitingScreenshot" and not capture
+            )):
                 return previous
             manifest = previous
             manifest.pop("error", None)
@@ -281,7 +290,7 @@ def run(job, config, *, approve_blender=False, approve_unreal=False, target="ble
                 manifest["status"] = "ReadyForUnreal"
                 manifest["stage"] = "unreal-import"
                 save()
-            if target == "unreal":
+            if target != "blender" and not manifest.get("unreal"):
                 # A fresh namespace prevents importers from replacing prior assets on retry.
                 import_id = "Import_" + uuid.uuid4().hex
                 destination = f"/Game/AIStudio/{normalized['taskId'].replace('-', '_')}/{import_id}"
@@ -303,6 +312,40 @@ def run(job, config, *, approve_blender=False, approve_unreal=False, target="ble
                     raise RuntimeError("Unreal import report did not confirm a StaticMesh")
                 manifest["artifacts"] += artifacts(output, [Path(unreal_job["report"]).name])
                 manifest.update(status="ReadyForUnrealQA", stage="unreal-qa", unreal=imported)
+                save()
+            if target == "unreal-qa":
+                validation_id = "QA_" + uuid.uuid4().hex
+                destination = manifest["unrealDestination"]
+                validation_job = {
+                    "destination": destination, "mesh_paths": manifest["unreal"]["staticMeshPaths"],
+                    "level_path": destination + "/" + validation_id,
+                    "policy": config.get("unreal_qa", {}), "capture": capture,
+                    "screenshot": str(output / (validation_id + ".png")),
+                    "report": str(output / (validation_id + ".json")),
+                }
+                validation_job_path = output / (validation_id + "-job.json")
+                write_json(validation_job_path, validation_job)
+                env = {**os.environ, "AI_STUDIO_UNREAL_VALIDATION_JOB": str(validation_job_path)}
+                rendering = ["-AllowCommandletRendering", "-RenderOffscreen"] if capture else ["-nullrhi"]
+                manifest.update(status="Running", stage="unreal-qa", unrealValidationJob=str(validation_job_path))
+                save()
+                run_tool([unreal_editor, str(project), "-unattended", "-nop4", "-nosplash", *rendering,
+                          "-run=pythonscript", "-script=" + str(HERE / "unreal_validation_runtime.py")],
+                         output, validation_id, config.get("unreal_timeout", 1800), runner, env)
+                validation = read_json(validation_job["report"])
+                if (validation.get("status") != "validated" or validation.get("levelPath") != validation_job["level_path"]
+                        or type(validation.get("spawnedActors")) is not int or validation["spawnedActors"] < 1
+                        or not validation.get("meshes") or any(result.get("status") != "pass" for result in validation["meshes"])
+                        or {result.get("path") for result in validation["meshes"]} != set(validation_job["mesh_paths"])
+                        or validation["spawnedActors"] != len(validation_job["mesh_paths"])):
+                    raise RuntimeError("Unreal QA report did not confirm validated meshes and test map")
+                manifest["artifacts"] += artifacts(output, [Path(validation_job["report"]).name])
+                if capture:
+                    if validation.get("screenshot") != validation_job["screenshot"]:
+                        raise RuntimeError("Unreal QA report did not confirm requested screenshot")
+                    manifest["artifacts"] += artifacts(output, [Path(validation_job["screenshot"]).name])
+                manifest.update(status="AwaitingVisualReview" if capture else "AwaitingScreenshot",
+                                stage="visual-review" if capture else "unreal-screenshot", unrealQA=validation)
             save()
             return manifest
         except Exception as error:
@@ -315,7 +358,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("job", type=Path)
     parser.add_argument("--config", type=Path, default=ROOT / "config" / "asset-pipeline.json")
-    parser.add_argument("--target", choices=("blender", "unreal"), default="blender")
+    parser.add_argument("--target", choices=("blender", "unreal", "unreal-qa"), default="blender")
+    parser.add_argument("--capture", action="store_true", help="Render Unreal PNG; requires target unreal-qa and a working renderer")
     parser.add_argument("--approve-blender", action="store_true")
     parser.add_argument("--approve-unreal", action="store_true")
     parser.add_argument("--resume", action="store_true")
@@ -324,7 +368,7 @@ def main():
     try:
         job, config = read_json(args.job), read_json(args.config)
         result = validate_job(job, config) if args.plan else run(job, config, target=args.target,
-            approve_blender=args.approve_blender, approve_unreal=args.approve_unreal, resume=args.resume)
+            approve_blender=args.approve_blender, approve_unreal=args.approve_unreal, resume=args.resume, capture=args.capture)
         # ASCII JSON survives Windows PowerShell 5 pipe encodings; the JSON parser restores Unicode.
         print(json.dumps(result))
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:

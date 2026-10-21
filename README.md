@@ -3,7 +3,8 @@
 ## Prop pipeline development
 
 The opt-in worker asset pipeline adds Blender prop cleanup/export, three previews,
-structured QA, and an Unreal StaticMesh import adapter. See
+structured QA, and Unreal StaticMesh import, saved-mesh QA, isolated test-map and
+optional offscreen screenshot adapters. See
 [setup, approvals, local validation and remaining M1 work](docs/PROP-PIPELINE.md).
 Real Blender/Unreal integration evidence is still required. The existing v11
 skeleton job workflow below remains available.
