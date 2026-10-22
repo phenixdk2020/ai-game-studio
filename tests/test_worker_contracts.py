@@ -90,47 +90,32 @@ if (-not $blocked -or (Test-Path $path)) { throw 'Deleted queue was recreated fr
             self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Studio.Queue.psm1"))
                          .replace("__TEMP__", folder))
 
-    def test_generate_request_and_rejected_response(self):
+    def test_worker_hunyuan_calls_managed_adapter_and_rejects_bad_output(self):
         with TemporaryDirectory() as folder:
             source = r'''
 Import-Module '__MODULE__' -Force
-$tokens = $null; $parseErrors = $null
-$ast = [Management.Automation.Language.Parser]::ParseFile('__WORKER__', [ref]$tokens, [ref]$parseErrors)
-if ($parseErrors.Count) { throw 'Worker parser error' }
-$function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-HunyuanGeneration' }, $true)
-Invoke-Expression $function.Extent.Text
-function Update-TaskProgress { param($Task, $Queue, $Progress, $Percent) }
-function Invoke-WebRequest {
-    param($Uri, $Method, $ContentType, $Body, $OutFile, [switch]$PassThru, [switch]$UseBasicParsing, $TimeoutSec)
-    $script:calls++
-    $request = $Body | ConvertFrom-Json
-    if ($request.image -ne [Convert]::ToBase64String([byte[]](1,2,3))) { throw 'Not raw Base64' }
-    [IO.File]::WriteAllText($OutFile, ('{"error":"bad request"}' * 100))
-    return [pscustomobject]@{ Headers = @{ 'Content-Type' = 'application/json' } }
+$tokens=$null;$parseErrors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile('__WORKER__',[ref]$tokens,[ref]$parseErrors)
+if($parseErrors.Count){throw 'Worker parser error'}
+foreach($name in @('Invoke-HunyuanGeneration','Set-TaskProperty')){
+ $definition=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name},$true)
+ Invoke-Expression $definition.Extent.Text
 }
-$jobRoot = '__TEMP__'
-$utf8 = New-Object Text.UTF8Encoding($false)
-$image = Join-Path $jobRoot 'image.png'
-[IO.File]::WriteAllBytes($image, [byte[]](1,2,3))
-$task = [pscustomobject]@{ id = 'TASK-1'; attachments = @($image) }
-$script:calls = 0
-$blocked = $false
-try { Invoke-HunyuanGeneration -Task $task -Queue @($task) -Port 8081 } catch { $blocked = $true }
-if (-not $blocked -or $script:calls -ne 1) { throw 'Expected a rejected generation response' }
-$output = Join-Path $jobRoot 'TASK-1/hunyuan-output'
-if (Test-Path (Join-Path $output 'hunyuan-model.glb')) { throw 'Error published as GLB' }
-if (@(Get-ChildItem $output -Filter '*.rejected').Count -ne 1) { throw 'Rejected response missing' }
-$metadataFile = Get-ChildItem $output -Filter '*.metadata.json'
-$metadata = [IO.File]::ReadAllText($metadataFile.FullName) | ConvertFrom-Json
-if ($metadata.status -ne 'failed' -or $metadata.taskId -ne 'TASK-1') { throw 'Missing error metadata' }
-if ($metadata.parameters.PSObject.Properties.Name -contains 'image') { throw 'Base64 leaked into metadata' }
-[IO.File]::WriteAllText((Join-Path $output 'hunyuan-model.glb'), 'existing')
-try { Invoke-HunyuanGeneration -Task $task -Queue @($task) -Port 8081 } catch { }
-if ($script:calls -ne 1) { throw 'Existing output was not protected' }
+function Update-TaskProgress {param($Task,$Queue,$Progress,$Percent)}
+function Invoke-TestTool {
+ $script:calls++
+ if($args -notcontains '--approve-launch' -or $args[0] -notlike '*hunyuan_pinokio.py'){throw 'Managed adapter not used'}
+ $global:LASTEXITCODE=0
+ @{status='QueuedForBlender';output=(Join-Path $jobRoot 'bad.glb');resultPath='receipt.json';ref='pinokio://localhost:42000/api/hunyuan'}|ConvertTo-Json -Compress
+}
+$Root='__ROOT__';$jobRoot='__TEMP__';$Python='Invoke-TestTool'
+$image=Join-Path $jobRoot 'image.png';[IO.File]::WriteAllBytes($image,[byte[]](1,2,3))
+[IO.File]::WriteAllText((Join-Path $jobRoot 'bad.glb'),'error response')
+$task=[pscustomobject]@{id='TASK-1';attachments=@($image)};$script:calls=0;$blocked=$false
+try{Invoke-HunyuanGeneration -Task $task -Queue @($task)}catch{$blocked=$true}
+if(-not $blocked -or $script:calls -ne 1){throw 'Invalid output accepted or adapter not called'}
 '''
-            self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Hunyuan.Response.psm1"))
-                         .replace("__WORKER__", str(ROOT / "tools" / "project-manager-worker.ps1"))
-                         .replace("__TEMP__", folder))
+            self.execute(source.replace('__MODULE__',str(ROOT/'adapters/Hunyuan.Response.psm1')).replace('__WORKER__',str(ROOT/'tools/project-manager-worker.ps1')).replace('__ROOT__',str(ROOT)).replace('__TEMP__',folder))
 
     def test_worker_merges_gui_additions_and_stops_on_control_or_input_edits(self):
         with TemporaryDirectory() as folder:

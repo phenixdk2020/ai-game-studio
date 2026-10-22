@@ -20,7 +20,11 @@ def main(argv=None):
         command = commands.add_parser(action)
         command.add_argument('title')
         command.add_argument('--description', default='')
-        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github'), default='auto')
+        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github','pinokio'), default='auto')
+        command.add_argument('--tool',default='')
+        command.add_argument('--operation',default='')
+        command.add_argument('--parameters-json',default='{}')
+        command.add_argument('--app-id',default='')
         command.add_argument('--role', default='project_manager')
         command.add_argument('--attachment', action='append', default=[])
         command.add_argument('--depends-on', action='append', default=[])
@@ -34,6 +38,10 @@ def main(argv=None):
     args = vars(parser.parse_args(argv))
     action = args['action']
     if action in ('add','plan'):
+        try:parameters=json.loads(args.pop('parameters_json'))
+        except ValueError:parser.error('--parameters-json must be valid JSON')
+        if not isinstance(parameters,dict):parser.error('--parameters-json must be an object')
+        args.update(toolCapability=args.pop('tool'),toolOperation=args.pop('operation'),toolParameters=parameters,toolAppId=args.pop('app_id'))
         args.update(action='add', kind='plan' if action=='plan' else 'task',
             description=args['description'] or args['title'], attachments=args.pop('attachment'),
             dependencies=args.pop('depends_on'), projectPath=args.pop('project'))

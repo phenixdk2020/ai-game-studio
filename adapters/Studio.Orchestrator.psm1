@@ -3,9 +3,10 @@ Import-Module (Join-Path $PSScriptRoot 'Studio.Queue.psm1')
 function New-StudioTask {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$Title,
           [Parameter(Mandatory)][string]$Description,
-          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github')][string]$Backend='auto',
+          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','pinokio')][string]$Backend='auto',
           [string]$Role='project_manager', [string[]]$Attachments=@(), [string]$ProjectPath='',
-          [string[]]$Dependencies=@(), [ValidateSet('task','plan')][string]$Kind='task')
+          [string[]]$Dependencies=@(), [ValidateSet('task','plan')][string]$Kind='task',
+          [string]$ToolCapability='', [string]$ToolOperation='', $ToolParameters=@{}, [string]$ToolAppId='')
     $path = Join-Path $Root 'tasks/queue.gui.json'
     $snapshot = Get-StudioQueueSnapshot -Path $path
     $task = [pscustomobject]@{
@@ -13,6 +14,7 @@ function New-StudioTask {
         title=$Title; description=$Description; backend=$Backend; role=$Role; agent=$Role
         attachments=@($Attachments); projectPath=$ProjectPath; dependencies=@($Dependencies)
         kind=$Kind; status='Queued'; priority=10; createdAt=[DateTime]::UtcNow.ToString('o')
+        toolCapability=$ToolCapability;toolOperation=$ToolOperation;toolParameters=$ToolParameters;toolAppId=$ToolAppId
     }
     $null = New-Item -ItemType Directory -Force -Path (Split-Path $path)
     Write-StudioQueue -Path $path -Items @($snapshot.Tasks + $task) -ExpectedRevision $snapshot.Revision
@@ -22,6 +24,7 @@ function New-StudioTask {
 function Get-StudioBackend {
     param($Task)
     if ($Task.backend -and $Task.backend -ne 'auto') { return [string]$Task.backend }
+    if ($Task.toolCapability) { return 'pinokio' }
     if ($Task.kind -eq 'plan') { return 'ollama' }
     $text = "$($Task.title) $($Task.description)"
     if ($text -match '(?i)3d|mesh|sword|character|prop|sv.rd|model af|blender') { return 'asset3d' }
@@ -58,6 +61,13 @@ function Approve-StudioResult {
     $task = @($snapshot.Tasks | Where-Object id -eq $Id)[0]
     if (-not $task) { throw 'Task not found.' }
     if ($Id -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$') { throw 'Invalid task id.' }
+    if ($task.backend -eq 'pinokio' -and $task.status -eq 'AwaitingVisualReview') {
+        $taskFile=Join-Path $Root "data/pipeline-jobs/$Id/bridge-task.json"
+        $original=Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8|ConvertFrom-Json
+        foreach($name in @('title','description','backend','role','attachments','projectPath','toolCapability','toolOperation','toolAppId','toolParameters')) {
+            if ((ConvertTo-Json -InputObject $original.$name -Depth 40 -Compress) -ne (ConvertTo-Json -InputObject $task.$name -Depth 40 -Compress)) { throw 'Tool task inputs changed after execution; create a new task.' }
+        }
+    }
     if ($task.status -eq 'AwaitingCodeReview') {
         $taskFile=Join-Path $Root "data/pipeline-jobs/$Id/bridge-task.json"
         $response=& python (Join-Path $PSScriptRoot 'project_bridge.py') $taskFile --config (Join-Path $Root 'config/orchestrator.json') --verify-review
@@ -84,7 +94,7 @@ function Approve-StudioResult {
         $children = @(ConvertTo-StudioTasks -Value $plan.tasks)
         $ids = @($children | ForEach-Object id)
         foreach ($child in $children) {
-            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github') -or
+            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github','pinokio') -or
                 @($child.dependencies | Where-Object { $_ -notin $ids }).Count) { throw 'Invalid child task.' }
         }
         $resolved = @()

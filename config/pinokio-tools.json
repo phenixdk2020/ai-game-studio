@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "pterm": "",
+  "command_timeout": 30,
+  "startup_timeout": 180,
+  "request_timeout": 900,
+  "tools": {
+    "image_to_3d": {
+      "query": "Hunyuan3D",
+      "preferred_app": "Hunyuan3d-2-lowvram.git",
+      "selectors": ["start.js?profile=4"],
+      "startup_timeout": 900,
+      "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
+      "operations": {
+        "generate_shape": {
+          "api_name": "shape_generation",
+          "file_inputs": ["image"],
+          "attachment_parameter": "image",
+          "artifact_extensions": [".glb"],
+          "defaults": {"steps": 5, "seed": 1234, "randomize_seed": false, "octree_resolution": 256, "check_box_rembg": true}
+        },
+        "decode_settings": {
+          "api_name": "on_decode_mode_change",
+          "defaults": {"value": "Standard"}
+        }
+      }
+    },
+    "image_generation": {
+      "query": "image generation",
+      "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
+      "operations": {}
+    },
+    "animation": {
+      "query": "mesh2motion",
+      "roles": ["project_manager", "rigging", "animation", "integration", "qa"],
+      "operations": {}
+    }
+  }
+}

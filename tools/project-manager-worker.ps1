@@ -79,7 +79,7 @@ function Invoke-SpecialistTask {
     Set-TaskProperty $Task 'backend' $Backend
     if (-not $EnableSpecialists) {
         Set-TaskProperty $Task 'status' 'WaitingForApproval'
-        Set-TaskProperty $Task 'question' 'Enable specialist/Copilot backends and retry to dispatch this task.'
+        Set-TaskProperty $Task 'question' 'Enable agent/Pinokio/Copilot backends and retry to dispatch this task.'
         Write-Queue -Items $Queue
         return
     }
@@ -173,83 +173,6 @@ function Invoke-AssetStages {
     Write-Queue -Items $Queue
 }
 
-function Test-Is3DTask {
-    param($Task)
-    $text = "{0} {1}" -f $Task.title, $Task.description
-    return $text -match '(?i)3d|model|mesh|sword|weapon|character|prop|sv.rd|v.ben'
-}
-
-function Find-HunyuanApplication {
-    $candidates = @(
-        'D:\Pinokio\api\Hunyuan3d-2-lowvram.git',
-        'D:\Pinokio\api\Hunyuan3D-2-lowvram.git',
-        'C:\pinokio\api\Hunyuan3d-2-lowvram.git',
-        'C:\pinokio\api\Hunyuan3D-2-lowvram.git',
-        (Join-Path $env:USERPROFILE 'pinokio\api\Hunyuan3d-2-lowvram.git')
-    )
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path (Join-Path $candidate 'app\api_server.py')) {
-            return $candidate
-        }
-    }
-
-    foreach ($searchRoot in @('D:\Pinokio\api', 'C:\pinokio')) {
-      if (Test-Path $searchRoot) {
-        $apiFile = Get-ChildItem -Path $searchRoot -Filter 'api_server.py' `
-            -File -Recurse -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.FullName -match 'Hunyuan3D-2GP|Hunyuan3d-2-lowvram'
-            } |
-            Select-Object -First 1
-
-        if ($apiFile) {
-            return Split-Path (Split-Path $apiFile.FullName -Parent) -Parent
-        }
-      }
-    }
-
-    throw 'Hunyuan3D-2-LowVRAM app\api_server.py was not found below D:\Pinokio\api or C:\pinokio.'
-}
-
-function Find-PinokioPython {
-    param([Parameter(Mandatory)][string]$ApplicationPath)
-
-    $candidates = @(
-        (Join-Path $ApplicationPath 'app\env\Scripts\python.exe'),
-        (Join-Path $ApplicationPath 'env\Scripts\python.exe')
-    )
-
-    foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) {
-            return $candidate
-        }
-    }
-
-    throw "Pinokio Python environment not found below $ApplicationPath"
-}
-
-function Test-HunyuanApi {
-    param([int]$Port)
-
-    foreach ($path in @('/openapi.json', '/docs')) {
-        try {
-            $response = Invoke-WebRequest `
-                -Uri "http://127.0.0.1:$Port$path" `
-                -UseBasicParsing `
-                -TimeoutSec 3
-
-            if ($response.StatusCode -eq 200) {
-                return $true
-            }
-        }
-        catch {
-        }
-    }
-
-    return $false
-}
-
 function Update-TaskProgress {
     param(
         [Parameter(Mandatory)]$Task,
@@ -266,147 +189,20 @@ function Update-TaskProgress {
     Write-WorkerLog -Message "$($Task.id): $Progress ($Percent%)"
 }
 
-function Start-HunyuanApi {
-    param(
-        [Parameter(Mandatory)][string]$ApplicationPath,
-        [Parameter(Mandatory)][string]$PythonPath,
-        [Parameter(Mandatory)][int]$Port,
-        [Parameter(Mandatory)]$Task,
-        [Parameter(Mandatory)][array]$Queue
-    )
-
-    if (Test-HunyuanApi -Port $Port) {
-        Update-TaskProgress -Task $Task -Queue $Queue `
-            -Progress 'Hunyuan API is already ready.' -Percent 35
-        return
-    }
-
-    $applicationDirectory = Join-Path $ApplicationPath 'app'
-    $stdoutLog = Join-Path $logDirectory 'hunyuan-api.out.log'
-    $stderrLog = Join-Path $logDirectory 'hunyuan-api.err.log'
-    $arguments = @(
-        'api_server.py',
-        '--host', '127.0.0.1',
-        '--port', "$Port",
-        '--model_path', 'tencent/Hunyuan3D-2mini',
-        '--device', 'cuda'
-    )
-
-    Update-TaskProgress -Task $Task -Queue $Queue `
-        -Progress 'Starting local Hunyuan API.' -Percent 15
-
-    Start-Process -FilePath $PythonPath `
-        -WorkingDirectory $applicationDirectory `
-        -ArgumentList $arguments `
-        -RedirectStandardOutput $stdoutLog `
-        -RedirectStandardError $stderrLog `
-        -WindowStyle Hidden | Out-Null
-
-    for ($poll = 1; $poll -le 180; $poll++) {
-        if (Test-HunyuanApi -Port $Port) {
-            Update-TaskProgress -Task $Task -Queue $Queue `
-                -Progress 'Hunyuan API is ready.' -Percent 35
-            return
-        }
-
-        if (($poll % 5) -eq 0) {
-            $percent = [Math]::Min(34, 15 + [int]($poll / 10))
-            Update-TaskProgress -Task $Task -Queue $Queue `
-                -Progress "Waiting for Hunyuan API. Poll $poll of 180." `
-                -Percent $percent
-        }
-
-        Start-Sleep -Seconds 2
-    }
-
-    throw "Hunyuan API did not become ready. Read $stderrLog"
-}
-
 function Invoke-HunyuanGeneration {
-    param(
-        [Parameter(Mandatory)]$Task,
-        [Parameter(Mandatory)][array]$Queue,
-        [Parameter(Mandatory)][int]$Port
-    )
-
-    $inputImage = @(
-        $Task.attachments |
-            Where-Object { Test-Path -LiteralPath $_ } |
-            Select-Object -First 1
-    )
-
-    if (-not $inputImage) {
-        throw 'No readable reference image is attached.'
-    }
-
-    $taskDirectory = Join-Path $jobRoot $Task.id
-    $outputDirectory = Join-Path $taskDirectory 'hunyuan-output'
-    New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
-
-    $imageBytes = [System.IO.File]::ReadAllBytes($inputImage[0])
-    $base64 = [Convert]::ToBase64String($imageBytes)
-
-    $request = @{
-        image = $base64
-        remove_background = $true
-        texture = $false
-        seed = 1234
-        octree_resolution = 256
-        num_inference_steps = 5
-        guidance_scale = 5.0
-        face_count = 40000
-        type = 'glb'
-    }
-
-    $requestBody = $request | ConvertTo-Json -Compress
-    $outputFile = Join-Path $outputDirectory 'hunyuan-model.glb'
-
-    Update-TaskProgress -Task $Task -Queue $Queue `
-        -Progress 'Generating 3D model from the first reference image.' `
-        -Percent 45
-
-    if (Test-Path -LiteralPath $outputFile) {
-        throw 'Output already exists; preserve it before retrying generation.'
-    }
-    $temporaryFile = Join-Path $outputDirectory ('response-' + [guid]::NewGuid().ToString('N') + '.tmp')
-    $metadata = @{
-        taskId = $Task.id
-        endpoint = "http://127.0.0.1:$Port/generate"
-        startedAt = [DateTime]::UtcNow.ToString('o')
-        imageSha256 = (Get-FileHash -LiteralPath $inputImage[0] -Algorithm SHA256).Hash
-        parameters = @{}
-    }
-    foreach ($key in $request.Keys) {
-        if ($key -ne 'image') { $metadata.parameters[$key] = $request[$key] }
-    }
-    try {
-        $response = Invoke-WebRequest `
-            -Uri $metadata.endpoint -Method Post -ContentType 'application/json' `
-            -Body $requestBody -OutFile $temporaryFile -PassThru `
-            -UseBasicParsing -TimeoutSec 7200
-        $metadata.contentType = [string]$response.Headers['Content-Type']
-        Test-HunyuanGlb -Path $temporaryFile -ContentType $metadata.contentType
-        [IO.File]::Move($temporaryFile, $outputFile)
-        $metadata.outputSha256 = (Get-FileHash -LiteralPath $outputFile -Algorithm SHA256).Hash
-        $metadata.status = 'validated'
-    } catch {
-        $metadata.status = 'failed'
-        $metadata.error = $_.Exception.Message
-        if (Test-Path -LiteralPath $temporaryFile) {
-            Move-Item -LiteralPath $temporaryFile -Destination ($temporaryFile + '.rejected')
-        }
-        if ($_.ErrorDetails.Message) { $metadata.errorBody = $_.ErrorDetails.Message }
-        throw
-    } finally {
-        $metadata.finishedAt = [DateTime]::UtcNow.ToString('o')
-        $metadataPath = $temporaryFile + '.metadata.json'
-        [IO.File]::WriteAllText($metadataPath, ($metadata | ConvertTo-Json -Depth 8), $utf8)
-    }
-
-    Update-TaskProgress -Task $Task -Queue $Queue `
-        -Progress 'Hunyuan model generation completed; Blender and QA are pending.' -Percent 60
-
-    return $outputFile
+    param($Task, [array]$Queue)
+    $image=@($Task.attachments|Where-Object {Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1)
+    if(-not $image.Count){throw 'No readable reference image is attached.'}
+    Update-TaskProgress -Task $Task -Queue $Queue -Progress 'Starting Hunyuan through Pinokio and calling its documented API.' -Percent 15
+    $evidence=Join-Path $jobRoot ($Task.id+'/hunyuan-output')
+    $arguments=@((Join-Path $Root 'adapters/hunyuan_pinokio.py'),'--image',$image[0],'--evidence',$evidence,'--approve-launch')
+    $lines=@(& $Python @arguments)
+    $result=($lines -join "`n")|ConvertFrom-Json
+    if($LASTEXITCODE -ne 0){throw $result.error}
+    Test-HunyuanGlb -Path $result.output -ContentType 'model/gltf-binary'
+    Set-TaskProperty $Task 'pinokioRef' $result.ref
+    Set-TaskProperty $Task 'toolResultPath' $result.resultPath
+    return $result.output
 }
 
 $workerLock = Enter-StudioWorkerLock -Path ($queuePath + '.worker.lock') -Version '18.0'
@@ -455,23 +251,9 @@ try {
             Write-Queue -Items $queue
 
             Update-TaskProgress -Task $task -Queue $queue `
-                -Progress 'Locating the Pinokio Hunyuan installation.' -Percent 5
+                -Progress 'Discovering the Hunyuan tool through Pinokio.' -Percent 5
 
-            $applicationPath = Find-HunyuanApplication
-            $pythonPath = Find-PinokioPython -ApplicationPath $applicationPath
-            $port = 8081
-
-            Start-HunyuanApi `
-                -ApplicationPath $applicationPath `
-                -PythonPath $pythonPath `
-                -Port $port `
-                -Task $task `
-                -Queue $queue
-
-            $outputFile = Invoke-HunyuanGeneration `
-                -Task $task `
-                -Queue $queue `
-                -Port $port
+            $outputFile = Invoke-HunyuanGeneration -Task $task -Queue $queue
 
             Set-TaskProperty -Task $task -Name 'hunyuanOutput' -Value $outputFile
             Set-TaskProperty -Task $task -Name 'pipelineStage' -Value 'blender-cleanup'

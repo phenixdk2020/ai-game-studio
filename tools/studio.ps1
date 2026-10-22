@@ -9,7 +9,7 @@ switch ($request.action) {
     'status' { ConvertTo-Json -InputObject @((Get-StudioQueueSnapshot -Path (Join-Path $Root 'tasks/queue.gui.json')).Tasks) -Depth 40 }
     'setup' { Get-Content -LiteralPath (Join-Path $Root 'config/orchestrator.json') -Raw }
     'add' {
-        New-StudioTask -Root $Root -Title $request.title -Description $request.description -Backend $request.backend -Role $request.role -Attachments @($request.attachments) -ProjectPath $request.projectPath -Dependencies @($request.dependencies) -Kind $request.kind | ConvertTo-Json -Depth 40
+        New-StudioTask -Root $Root -Title $request.title -Description $request.description -Backend $request.backend -Role $request.role -Attachments @($request.attachments) -ProjectPath $request.projectPath -Dependencies @($request.dependencies) -Kind $request.kind -ToolCapability $request.toolCapability -ToolOperation $request.toolOperation -ToolParameters $request.toolParameters -ToolAppId $request.toolAppId | ConvertTo-Json -Depth 40
     }
     'approve' { Approve-StudioResult -Root $Root -Id $request.id }
     'import-legacy' { Import-StudioLegacyQueue -Root $Root -Source $request.source -Apply:([bool]$request.apply) | ConvertTo-Json -Depth 40 }

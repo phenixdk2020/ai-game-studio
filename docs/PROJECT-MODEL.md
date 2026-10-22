@@ -29,6 +29,12 @@ Possible execution backends have different responsibilities:
 | CLI | tools/studio.py and compatibility core/studio.py | Same canonical queue | Adds tasks/plans, runs worker, approves results and explicitly imports old queues |
 | Earlier entry points | gui/project-manager.ps1 and AIStudio.Queue.psm1 | Same canonical queue | Compatibility facade; no second queue writer |
 | Provider adapter | adapters/project_bridge.py | Per-task receipts | Ollama, local Copilot, GitHub task dispatch/polling and isolated PR validation |
+| Pinokio tools | adapters/pinokio_tools.py | pterm and registered app APIs | Discover/launch apps, transfer inputs and return verified artifacts to role tasks |
+
+The [Pinokio tool integration](PINOKIO-TOOLS.md) now includes live-tested Hunyuan
+shape generation and a real worker/queue round trip. Image and animation app
+candidates can be discovered; their generation operations still need app-specific
+API registration and validation.
 
 The GUI, worker and CLI share adapters/Studio.Queue.psm1 and
 adapters/Studio.Orchestrator.psm1. Historical queues are imported only on an explicit

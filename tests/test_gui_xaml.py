@@ -41,7 +41,7 @@ class GuiViewTests(unittest.TestCase):
                 "if($window.IsVisible){throw 'Unexpected visible window'}; "
                 "foreach($name in @('Agent','NewBtn','SaveBtn','WorkerBtn','Queue','Title','Description','Attachments','ProjectPath')){Set-Variable $name $window.FindName($name)}; "
                 ". '" + str(GUI.parents[1]/'adapters/Studio.Gui.ps1').replace("'", "''") + "'; "
-                "if($Backend.Items.Count -ne 5 -or $null -eq $Dependencies -or $null -eq $SpecialistsEnabled){throw 'Unified controls missing'}; $window.Close()"
+                "if($Backend.Items.Count -ne 6 -or $null -eq $Dependencies -or $null -eq $SpecialistsEnabled -or $null -eq $ToolCapability -or $ToolParameters.Text -ne '{}'){throw 'Unified controls missing'}; $window.Close()"
             )
             result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command],
                                     capture_output=True, timeout=30)

@@ -46,6 +46,8 @@ function ReadQ {
 }
 function Save-StudioForm {
     if ([string]::IsNullOrWhiteSpace($Title.Text)) { throw 'Angiv en titel.' }
+    $toolArguments=ConvertFrom-Json -InputObject $ToolParameters.Text
+    if($toolArguments -isnot [pscustomobject]){throw 'Værktøjsparametre skal være et JSON-objekt.'}
     $snapshot = Get-StudioQueueSnapshot -Path $q
     $selected = $Queue.SelectedItem
     if ($selected) {
@@ -58,6 +60,7 @@ function Save-StudioForm {
     foreach ($pair in @(@('title',$Title.Text),@('description',$Description.Text),@('agent',$Agent.Text),@('role',$Agent.Text),@('backend',[string]$Backend.SelectedItem),@('dependencies',@($Dependencies.Text -split '[,\s]+'|Where-Object {$_})),@('projectPath',$ProjectPath.Text),@('newProject',[bool]$NewProject.IsChecked),@('attachments',@($Attachments.Items)),@('updatedAt',[DateTime]::UtcNow.ToString('o')))) {
         $task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force
     }
+    foreach($pair in @(@('toolCapability',$ToolCapability.Text),@('toolOperation',$ToolOperation.Text),@('toolAppId',$ToolAppId.Text),@('toolParameters',$toolArguments))){$task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
     Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision
     RefreshQ
 }
@@ -66,13 +69,13 @@ function WriteQ($items) {
 }
 function Assert-EditableTaskCurrent($displayed, $fresh) {
     if (-not $fresh) { throw 'The selected task was deleted. Refresh before saving.' }
-    foreach ($name in @('title','description','agent','backend','dependencies','projectPath','newProject','attachments')) {
+    foreach ($name in @('title','description','agent','backend','dependencies','projectPath','newProject','attachments','toolCapability','toolOperation','toolAppId','toolParameters')) {
         $before = ConvertTo-Json -InputObject $displayed.$name -Depth 40 -Compress
         $current = ConvertTo-Json -InputObject $fresh.$name -Depth 40 -Compress
         if ($before -ne $current) { throw "Task input changed elsewhere ($name). Refresh before saving your edit." }
     }
 }
-function RefreshQ{if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
+function RefreshQ{foreach($control in @($ToolCapability,$ToolOperation,$ToolAppId,$ToolParameters)){if($control.IsKeyboardFocusWithin){return}};if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
 function ClearForm{$Title.Text='';$Description.Text='';$Agent.Text='auto';$ProjectPath.Text='';$NewProject.IsChecked=$false;$Attachments.Items.Clear();$Question.Text='';$Feedback.Text=''}
 function MoveTask([int]$d){$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ|Sort-Object priority);$sel=$a|?{$_.id-eq$t.id}|Select-Object -First 1;if(!$sel){return};$i=[array]::IndexOf($a,$sel);$n=$i+$d;if($n-lt 0-or$n-ge$a.Count){return};$tmp=$a[$i];$a[$i]=$a[$n];$a[$n]=$tmp;for($j=0;$j-lt$a.Count;$j++){$a[$j].priority=$j+1};WriteQ $a;RefreshQ}
 function PaintPipeline($t){

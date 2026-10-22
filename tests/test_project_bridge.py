@@ -6,6 +6,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import shutil
 import subprocess
 
@@ -149,6 +150,48 @@ class BridgeTests(unittest.TestCase):
             with self.subTest(key=key,value=value),self.assertRaises(ValueError):validate(task,self.config)
         for plan in [{'tasks':[]},{'tasks':[{'key':'a'},{'key':'a'}]}]:
             with self.assertRaises(ValueError):normalize_plan(plan,'TASK-TEST',{},self.config['roles'])
+
+    def test_pinokio_task_uses_role_tools_and_requires_result_review(self):
+        self.task.update(backend='pinokio',role='character3d',toolCapability='image_to_3d',toolOperation='decode_settings',toolParameters={})
+        with patch('pinokio_tools.Pinokio') as tools:
+            tools.return_value.ensure.return_value={'app_id':'hunyuan','ready':True}
+            def invoke(*args):
+                (Path(args[-1])/'tool-result.json').write_text(json.dumps({'output':[256]}))
+            tools.return_value.invoke.side_effect=invoke
+            result=self.bridge().advance(True)
+            self.assertEqual(result['status'],'AwaitingVisualReview')
+            tools.return_value.ensure.assert_called_once()
+            self.assertTrue(Path(result['resultPath']).is_file())
+
+    def test_pinokio_role_cannot_launch_an_unassigned_tool(self):
+        self.task.update(backend='pinokio',role='historical_research',toolCapability='image_to_3d',toolOperation='decode_settings')
+        with patch('pinokio_tools.Pinokio') as tools:
+            result=self.bridge().advance(True)
+            self.assertEqual(result['status'],'Failed');self.assertIn('unavailable to this role',result['error'])
+            tools.assert_not_called()
+
+    def test_unregistered_pinokio_operation_does_not_launch_app(self):
+        self.task.update(backend='pinokio',role='character3d',toolCapability='image_to_3d',toolOperation='invented')
+        with patch('pinokio_tools.Pinokio') as tools:
+            result=self.bridge().advance(True)
+            self.assertEqual(result['status'],'NeedsInput')
+            tools.return_value.ensure.assert_not_called()
+
+    def test_pinokio_generation_uses_attached_reference(self):
+        image=Path(self.temp.name)/'reference.png';image.write_bytes(b'reference')
+        self.task.update(backend='pinokio',role='character3d',attachments=[str(image)],toolCapability='image_to_3d',toolOperation='generate_shape',toolParameters={})
+        with patch('pinokio_tools.Pinokio') as tools:
+            result=self.bridge().advance(True)
+            self.assertEqual(result['status'],'AwaitingVisualReview')
+            self.assertEqual(tools.return_value.invoke.call_args.args[2],{'image':{'local_file':str(image)}})
+
+    def test_planner_keeps_pinokio_tool_contract(self):
+        source={'attachments':[],'projectPath':''}
+        step=dict(key='shape',title='Shape',description='Generate',role='character3d',backend='pinokio',toolCapability='image_to_3d',toolOperation='generate_shape',toolParameters={'steps':5})
+        plan=normalize_plan({'tasks':[step]},'PARENT',source,self.config['roles'])
+        self.assertEqual(plan['tasks'][0]['toolParameters'],{'steps':5})
+        del step['toolCapability']
+        with self.assertRaisesRegex(ValueError,'requires capability'):normalize_plan({'tasks':[step]},'PARENT',source,self.config['roles'])
 
     @unittest.skipUnless(shutil.which('git'),'Git required')
     def test_validation_runs_real_git_and_real_tests_in_isolated_checkout(self):

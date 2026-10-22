@@ -20,6 +20,10 @@ eller valideret spilindhold.
 | `copilot-local` | Installeret Copilot CLI i separat Git-checkout | Testet kode og draft-PR |
 | `copilot-github` | `gh agent-task create`, efterfølgende session-polling | PR hentet til separat checkout og testet lokalt |
 | `asset3d` | Eksisterende Hunyuan → Blender → QA → Unreal | Model, previews, QA og importbeviser |
+| `pinokio` | Rollebegrænsede app-værktøjer gennem pterm og registrerede API-handlinger | Resultatfiler og kvitteringer til gennemgang |
+
+Se [Pinokio-værktøjer og virkelig validering](PINOKIO-TOOLS.md). Hunyuan-trinnet i
+`asset3d` bruger nu Pinokios launcher frem for en direkte Python-serveropstart.
 
 Modeller og rollefordeling læses fra `config/studio.json`. Repository, basegren,
 CLI-programmer, timeout, polling og testkommandoer læses fra

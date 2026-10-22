@@ -18,7 +18,7 @@ import uuid
 
 from asset_pipeline import ROOT, contained, read_json, task_lock, write_json
 
-BACKENDS = {"ollama", "copilot-local", "copilot-github"}
+BACKENDS = {"ollama", "copilot-local", "copilot-github", "pinokio"}
 PROTECTED = {"tasks", "results", "logs", "state"}
 
 
@@ -41,7 +41,7 @@ def validate(task, config):
         raise ValueError("Invalid task id")
     backend = task.get("backend")
     if backend not in BACKENDS:
-        raise ValueError("Select ollama, copilot-local or copilot-github")
+        raise ValueError("Select ollama, copilot-local, copilot-github or pinokio")
     for key in ("title", "description"):
         if not isinstance(task.get(key), str) or not task[key].strip():
             raise ValueError(f"Task requires {key}")
@@ -66,7 +66,8 @@ def validate(task, config):
         root = ROOT / root
     directory = contained(root / task["id"], root)
     source = {key: task.get(key, default) for key, default in (
-        ("title", ""), ("description", ""), ("attachments", []), ("projectPath", ""), ("dependencyResults", []))}
+        ("title", ""), ("description", ""), ("attachments", []), ("projectPath", ""), ("dependencyResults", []),
+        ('toolCapability',''),('toolOperation',''),('toolParameters',{}),('toolAppId',''))}
     if not isinstance(source["attachments"], list) or any(not isinstance(path, str) for path in source["attachments"]):
         raise ValueError("attachments must be an array of paths")
     payload = {"source": source, "backend": backend, "role": role, "kind": task.get("kind", "task"),
@@ -111,6 +112,10 @@ def normalize_plan(value, parent, source, roles):
             "agent": step["role"], "backend": step["backend"], "kind": "task", "status": "Queued",
             "dependencies": [mapping[key] for key in deps], "attachments": source["attachments"],
             "projectPath": source["projectPath"], "createdAt": now().isoformat(), "priority": 10})
+        if step['backend']=='pinokio':
+            if not isinstance(step.get('toolCapability'),str) or not isinstance(step.get('toolOperation'),str) or not isinstance(step.get('toolParameters',{}),dict):
+                raise ValueError('Pinokio plan task requires capability, operation and parameter object')
+            rows[-1].update(toolCapability=step['toolCapability'],toolOperation=step['toolOperation'],toolParameters=step.get('toolParameters',{}),toolAppId=step.get('toolAppId',''))
     resolved = set()
     while len(resolved) < len(graph):
         ready = {key for key, deps in graph.items() if set(deps) <= resolved}
@@ -170,6 +175,9 @@ class Bridge:
                 prompt += "Local absolute paths are unavailable remotely; request repository-accessible references where needed.\n"
         if self.source['dependencyResults']:
             prompt += '\nApproved dependency results:\n' + json.dumps(self.source['dependencyResults'], ensure_ascii=False) + '\n'
+        tool_config=read_json(ROOT/'config/pinokio-tools.json')
+        available=[{'capability':key,'operations':['inspect']+list(value.get('operations',{}))} for key,value in tool_config['tools'].items() if self.role in value['roles']]
+        prompt += '\nPinokio tools available to this role: '+json.dumps(available)+'. Use backend pinokio with toolCapability, toolOperation and toolParameters for a tool task. Do not claim tool execution from model text.\n'
         return prompt
 
     def request_llm(self, payload):
@@ -188,7 +196,7 @@ class Bridge:
         if planning:
             instructions += ('\nReturn only JSON {"tasks":[{"key":"step1","title":"...","description":"...",'
                 '"role":"project_manager","backend":"ollama","dependencies":[]}]}. '
-                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/copilot-local/copilot-github. '
+                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/copilot-local/copilot-github/pinokio. For pinokio tasks include toolCapability, toolOperation and toolParameters. '
                 'Do not claim execution. Allowed roles: ' + ", ".join(self.config["roles"]))
         answer = self.http({"model": model, "temperature": 0.2, "messages": [
             {"role": "system", "content": instructions}, {"role": "user", "content": self.source["description"]}]})
@@ -205,6 +213,34 @@ class Bridge:
         receipt.update(status="AwaitingPlanReview" if planning else "AwaitingVisualReview",
             stage="plan-review" if planning else "specialist-review", resultPath=str(target), model=model,
             question="Review the generated plan before applying child tasks." if planning else "Review the specialist result; model text is not execution evidence.")
+
+    def pinokio(self,receipt):
+        from pinokio_tools import Pinokio, ToolUnavailable
+        config=read_json(ROOT/'config/pinokio-tools.json')
+        capability=self.source['toolCapability'];operation=self.source['toolOperation']
+        tool=config['tools'].get(capability)
+        if not tool or self.role not in tool['roles']:
+            raise ValueError('Tool capability is unavailable to this role')
+        tools=Pinokio(config)
+        try:
+            if operation!='inspect' and operation not in tool.get('operations',{}):
+                raise ToolUnavailable('Tool operation is not registered; inspect and register its API before execution')
+            state=tools.ensure(capability,self.path,self.source['toolAppId'] or None,approve=True)
+            if operation=='inspect':
+                result=tools.inspect(state)
+                target=self.path/'tool-api.json';write_json(target,result)
+            else:
+                parameters=dict(self.source['toolParameters'])
+                attachment_parameter=tool.get('operations',{}).get(operation,{}).get('attachment_parameter')
+                if attachment_parameter and attachment_parameter not in parameters:
+                    attachments=[path for path in self.source['attachments'] if Path(path).is_file()]
+                    if not attachments:raise ValueError('Attach the input file required by this tool operation')
+                    parameters[attachment_parameter]={'local_file':attachments[0]}
+                tools.invoke(capability,operation,parameters,state,self.path)
+                target=self.path/'tool-result.json'
+            receipt.update(status='AwaitingVisualReview',stage='pinokio-review',resultPath=str(target),question='Review the Pinokio tool result and evidence before completion.')
+        except ToolUnavailable as error:
+            receipt.update(status='NeedsInput',stage='pinokio-tool',error=str(error),question='Inspect the Pinokio app/API contract; no direct app CLI fallback was used.')
 
     def clone(self, receipt):
         checkout = self.path / ("checkout-" + uuid.uuid4().hex[:12])
@@ -421,6 +457,9 @@ class Bridge:
                     self.ollama(receipt)
                 elif self.task["backend"] == "copilot-local":
                     self.local_copilot(receipt)
+                elif self.task['backend']=='pinokio':
+                    receipt.update(status='Running',stage='pinokio-tool');self.save(receipt)
+                    self.pinokio(receipt)
                 else:
                     self.github_start(receipt)
             except Exception as error:
