@@ -1,6 +1,6 @@
 """Unreal asset QA, isolated test map and optional offscreen scene capture.
 
-Runs in a fresh commandlet process, never inside the operator's open editor.
+Runs in a fresh full-editor process, never inside the operator's open editor.
 """
 import json
 import math
@@ -50,6 +50,8 @@ def evaluate(metrics, policy=None):
 
 def inspect_mesh(mesh, unreal, policy):
     subsystem = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+    if subsystem is None:
+        raise RuntimeError("StaticMeshEditorSubsystem unavailable; launch QA with -ExecutePythonScript, not -run=pythonscript")
     bounds = mesh.get_bounds()
     materials = list(mesh.get_editor_property("static_materials"))
     lods = subsystem.get_lod_count(mesh)
@@ -80,12 +82,14 @@ def test_scene(meshes, level_path, unreal):
         actor.set_actor_label(f"QA_Prop_{index + 1}")
         placed.append(actor)
     # Dynamic lighting supports the isolated preview without baking or changing project settings.
-    light = actors.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 300), unreal.Rotator(-45, -30, 0))
-    if light is None:
-        raise RuntimeError("Could not create test lighting")
-    component = light.get_component_by_class(unreal.DirectionalLightComponent)
-    component.set_mobility(unreal.ComponentMobility.MOVABLE)
-    component.set_editor_property("intensity", 5.0)
+    for yaw, intensity in ((45, 5.0), (135, 1.25)):
+        light = actors.spawn_actor_from_class(unreal.DirectionalLight, unreal.Vector(0, 0, 300),
+                                              unreal.Rotator(roll=0.0, pitch=-45.0, yaw=yaw))
+        if light is None:
+            raise RuntimeError("Could not create test lighting")
+        component = light.get_component_by_class(unreal.DirectionalLightComponent)
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_editor_property("intensity", intensity)
     if not levels.save_current_level():
         raise RuntimeError("Could not save test map")
     return placed
@@ -101,7 +105,7 @@ def screenshot(placed, path, unreal):
     high = [max(getattr(origin, axis) + getattr(extent, axis) for origin, extent in boxes) for axis in ("x", "y", "z")]
     center = unreal.Vector(*[(a + b) / 2 for a, b in zip(low, high)])
     radius = max(math.sqrt(sum((b - a) ** 2 for a, b in zip(low, high))) / 2, 1.0)
-    location = center + unreal.Vector(-radius * 3, -radius * 3, radius * 2)
+    location = center + unreal.Vector(-radius * 2, -radius * 2, radius)
     rotation = unreal.MathLibrary.find_look_at_rotation(location, center)
     capture_actor = actors.spawn_actor_from_class(unreal.SceneCapture2D, location, rotation)
     if capture_actor is None:
@@ -117,6 +121,23 @@ def screenshot(placed, path, unreal):
         capture.set_editor_property("capture_every_frame", False)
         capture.set_editor_property("capture_on_movement", False)
         capture.set_editor_property("capture_source", unreal.SceneCaptureSource.SCS_FINAL_COLOR_LDR)
+        capture.set_editor_property("fov_angle", 50.0)
+        # A one-shot capture has no eye-adaptation history. Fix exposure explicitly
+        # rather than inheriting the project's startup camera/exposure state.
+        settings = unreal.PostProcessSettings()
+        settings.set_editor_property("override_auto_exposure_method", True)
+        settings.set_editor_property("auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL)
+        settings.set_editor_property("override_auto_exposure_apply_physical_camera_exposure", True)
+        settings.set_editor_property("auto_exposure_apply_physical_camera_exposure", False)
+        settings.set_editor_property("override_auto_exposure_bias", True)
+        settings.set_editor_property("auto_exposure_bias", 0.0)
+        settings.set_editor_property("override_bloom_intensity", True)
+        settings.set_editor_property("bloom_intensity", 0.0)
+        capture.set_editor_property("post_process_settings", settings)
+        capture.set_editor_property("post_process_blend_weight", 1.0)
+        # Verified in UE 5.7's AsyncCompilationHelpers/AssetCompilingManager sources.
+        # Finish pending material/mesh work so the capture does not use fallback shaders.
+        unreal.SystemLibrary.execute_console_command(world, "Editor.AsyncAssetCompilationFinishAll")
         capture.capture_scene()
         pixels = unreal.RenderingLibrary.read_render_target(world, target)
         if not pixels or max(max(getattr(pixel, channel) for pixel in pixels) - min(

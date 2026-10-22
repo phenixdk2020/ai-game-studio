@@ -59,7 +59,16 @@ function Get-StudioQueueSnapshot {
 
 function Write-StudioQueue {
     param([Parameter(Mandatory)][string]$Path, [AllowEmptyCollection()][array]$Items,
-          [string]$ExpectedRevision, [switch]$PassThruRevision)
+          [string]$ExpectedRevision, [switch]$PassThruRevision,
+          [AllowEmptyCollection()][array]$BaseItems, [switch]$PassThruSnapshot)
+    $transaction = Enter-StudioQueueTransactionLock -Path ($Path + '.transaction.lock')
+    try {
+    if ($PSBoundParameters.ContainsKey('BaseItems')) {
+        $latest = Get-StudioQueueSnapshot -Path $Path
+        if ($latest.Revision -eq 'missing' -and $ExpectedRevision -ne 'missing') { throw 'Queue conflict: queue file was deleted.' }
+        $Items = @(Merge-StudioWorkerUpdate -Base $BaseItems -Proposed $Items -Current $latest.Tasks)
+        $ExpectedRevision = $latest.Revision
+    }
     $clean = @(ConvertTo-StudioTasks -Value $Items)
     $json = ConvertTo-Json -InputObject $clean -Depth 40
     $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
@@ -76,10 +85,72 @@ function Write-StudioQueue {
         $writtenRevision = Get-StudioBytesRevision -Bytes ([IO.File]::ReadAllBytes($temporary))
         if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
         else { [IO.File]::Move($temporary, $Path) }
-        if ($PassThruRevision) { $writtenRevision }
+        if ($PassThruSnapshot) { [pscustomobject]@{ Revision = $writtenRevision; Tasks = $clean } }
+        elseif ($PassThruRevision) { $writtenRevision }
     } finally {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
     }
+    } finally { $transaction.Dispose() }
+}
+
+function Enter-StudioQueueTransactionLock {
+    param([string]$Path, [int]$TimeoutMilliseconds = 3000)
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        try { return [IO.File]::Open($Path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+        catch [IO.IOException] {
+            if ($watch.ElapsedMilliseconds -ge $TimeoutMilliseconds) { throw "Queue transaction busy: $Path" }
+            Start-Sleep -Milliseconds 20
+        }
+    }
+}
+
+function Get-StudioPropertyJson {
+    param($Task, [string]$Name)
+    if ($Task.PSObject.Properties.Name -notcontains $Name) { return '<missing>' }
+    ConvertTo-Json -InputObject $Task.$Name -Depth 40 -Compress
+}
+
+function Merge-StudioWorkerUpdate {
+    param([AllowEmptyCollection()][array]$Base, [AllowEmptyCollection()][array]$Proposed,
+          [AllowEmptyCollection()][array]$Current)
+    $baseMap = @{}; $newMap = @{}; $currentMap = @{}
+    foreach ($item in @(ConvertTo-StudioTasks $Base)) { $baseMap[$item.id] = $item }
+    foreach ($item in @(ConvertTo-StudioTasks $Proposed)) { $newMap[$item.id] = $item }
+    foreach ($item in @(ConvertTo-StudioTasks $Current)) { $currentMap[$item.id] = $item }
+    foreach ($id in $baseMap.Keys) {
+        $old = $baseMap[$id]; $next = $newMap[$id]; $latest = $currentMap[$id]
+        if (-not $next) { throw 'Worker updates may not delete queue tasks.' }
+        $changed = @($next.PSObject.Properties.Name | Where-Object {
+            (Get-StudioPropertyJson $old $_) -ne (Get-StudioPropertyJson $next $_)
+        })
+        if (-not $changed.Count) { continue }
+        if (-not $latest) { throw "Queue conflict: task $id was deleted." }
+        if ($latest.status -in @('Cancelled', 'Paused') -and $latest.status -ne $old.status) {
+            throw "Queue conflict: task $id was paused or cancelled. Worker update stopped."
+        }
+        foreach ($name in @('title','description','attachments','projectPath','agent','newProject')) {
+            if ((Get-StudioPropertyJson $latest $name) -ne (Get-StudioPropertyJson $old $name)) {
+                throw "Queue conflict: task $id input changed ($name). Reload before continuing."
+            }
+        }
+        foreach ($name in $changed) {
+            $before = Get-StudioPropertyJson $old $name
+            $after = Get-StudioPropertyJson $next $name
+            $present = Get-StudioPropertyJson $latest $name
+            if ($present -ne $before -and $present -ne $after) { throw "Queue conflict: task $id property $name changed concurrently." }
+            $latest | Add-Member -NotePropertyName $name -NotePropertyValue $next.$name -Force
+        }
+    }
+    foreach ($id in $newMap.Keys) {
+        if (-not $baseMap.ContainsKey($id)) {
+            if ($currentMap.ContainsKey($id)) { throw "Queue conflict: duplicate new task $id." }
+            $currentMap[$id] = $newMap[$id]
+        }
+    }
+    # Keep current GUI order; append any new worker items afterwards.
+    foreach ($item in $Current) { if ($null -ne $item) { $currentMap[$item.id]; $currentMap.Remove($item.id) } }
+    foreach ($item in $currentMap.Values) { $item }
 }
 
 function Enter-StudioWorkerLock {

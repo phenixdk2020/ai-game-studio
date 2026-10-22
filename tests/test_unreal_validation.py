@@ -76,14 +76,20 @@ class UnrealValidationTests(unittest.TestCase):
             if exported:
                 (Path(folder) / name).write_bytes(b"\x89PNG\r\n\x1a\n" + b"mock image data" * 3)
         pixel = lambda n: SimpleNamespace(r=n, g=n, b=n)
+        def rotator(*args, **kwargs):
+            calls.append(("rotation", kwargs))
+            return object()
         fake = SimpleNamespace(StaticMesh=Mesh, StaticMeshEditorSubsystem="static",
             LevelEditorSubsystem="levels", EditorActorSubsystem="actors", UnrealEditorSubsystem="world",
-            get_editor_subsystem=lambda kind: components[kind], Vector=Vector, Rotator=lambda *a: object(),
+            get_editor_subsystem=lambda kind: components[kind], Vector=Vector, Rotator=rotator,
             DirectionalLight=object(), DirectionalLightComponent=object(), SceneCapture2D=object(),
             SceneCaptureComponent2D=object(), ComponentMobility=SimpleNamespace(MOVABLE="movable"),
+            PostProcessSettings=lambda: SimpleNamespace(set_editor_property=lambda *a: None),
+            AutoExposureMethod=SimpleNamespace(AEM_MANUAL="manual"),
             TextureRenderTargetFormat=SimpleNamespace(RTF_RGBA8="rgba8"),
             SceneCaptureSource=SimpleNamespace(SCS_FINAL_COLOR_LDR="ldr"),
             MathLibrary=SimpleNamespace(find_look_at_rotation=lambda *a: object()),
+            SystemLibrary=SimpleNamespace(execute_console_command=lambda world, command: calls.append(command)),
             EditorAssetLibrary=SimpleNamespace(load_asset=lambda path: mesh, does_asset_exist=lambda path: False),
             RenderingLibrary=SimpleNamespace(create_render_target2d=lambda *a, **k: object(),
                 read_render_target=lambda *a: [pixel(0), pixel(0 if uniform else 255)],
@@ -106,6 +112,7 @@ class UnrealValidationTests(unittest.TestCase):
         self.assertEqual(report["spawnedActors"], 1)
         self.assertEqual(report["meshes"][0]["status"], "pass")
         self.assertIn("new_level", calls)
+        self.assertIn(("rotation", {"roll": 0.0, "pitch": -45.0, "yaw": 45}), calls)
         self.assertIn("Unreal screenshot", report["pending"])
 
     def test_screenshot_and_resource_cleanup(self):
@@ -117,6 +124,7 @@ class UnrealValidationTests(unittest.TestCase):
             self.assertTrue(Path(report["screenshot"]).is_file())
         self.assertIn("release_target", calls)
         self.assertIn("destroy_capture", calls)
+        self.assertIn("Editor.AsyncAssetCompilationFinishAll", calls)
         self.assertNotIn("Unreal screenshot", report["pending"])
 
     def test_collision_failure_blocks_scene(self):
@@ -136,6 +144,13 @@ class UnrealValidationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "lods"):
                 runtime.main(self.job(folder))
         self.assertFalse(calls)
+
+    def test_commandlet_without_editor_subsystems_has_clear_failure(self):
+        fake, _ = self.fake()
+        fake.get_editor_subsystem = lambda kind: None
+        with TemporaryDirectory() as folder, patch.dict(sys.modules, unreal=fake):
+            with self.assertRaisesRegex(RuntimeError, "ExecutePythonScript"):
+                runtime.main(self.job(folder))
 
     def test_scene_and_capture_failures_record_report(self):
         for options in ({"save": False}, {"spawn": False}, {"uniform": True}, {"exported": False}):

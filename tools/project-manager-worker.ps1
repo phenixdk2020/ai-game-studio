@@ -56,12 +56,16 @@ function Set-TaskProperty {
 function Read-Queue {
     $snapshot = Get-StudioQueueSnapshot -Path $queuePath
     $script:queueRevision = $snapshot.Revision
+    $script:queueBaseJson = ConvertTo-Json -InputObject @($snapshot.Tasks) -Depth 40 -Compress
     $snapshot.Tasks
 }
 
 function Write-Queue {
     param([array]$Items)
-    $script:queueRevision = Write-StudioQueue -Path $queuePath -Items $Items -ExpectedRevision $script:queueRevision -PassThruRevision
+    $base = @($script:queueBaseJson | ConvertFrom-Json)
+    $written = Write-StudioQueue -Path $queuePath -Items $Items -ExpectedRevision $script:queueRevision -BaseItems $base -PassThruSnapshot
+    $script:queueRevision = $written.Revision
+    $script:queueBaseJson = ConvertTo-Json -InputObject @($Items) -Depth 40 -Compress
 }
 
 function Invoke-AssetStages {

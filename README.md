@@ -6,7 +6,8 @@ The opt-in worker asset pipeline adds Blender prop cleanup/export, three preview
 structured QA, and Unreal StaticMesh import, saved-mesh QA, isolated test-map and
 optional offscreen screenshot adapters. See
 [setup, approvals, local validation and remaining M1 work](docs/PROP-PIPELINE.md).
-Real Blender/Unreal integration evidence is still required. The existing v11
+A real synthetic-prop smoke test has exercised Blender and Unreal; see
+[local integration evidence](docs/INTEGRATION-2026-10-22.md). Asset-specific M1 evidence is still required. The existing v11
 skeleton job workflow below remains available.
 
 Real V11 adds the first controlled Blender execution adapter.

@@ -39,6 +39,12 @@ def main(job):
     bm.from_mesh(obj.data)
     loose = [v for v in bm.verts if not v.link_faces]
     bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    # glTF duplicates vertices at normal/UV seams. Recalculating each disconnected
+    # face can flip normals arbitrarily; weld coincident positions first. UVs are
+    # face-corner data and remain separate across their seams.
+    before_weld = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=1e-8)
+    welded_vertices = before_weld - len(bm.verts)
     bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
     bm.to_mesh(obj.data)
     bm.free()
@@ -83,6 +89,7 @@ def main(job):
                "dimensions_m": list(obj.dimensions), "has_uv": bool(obj.data.uv_layers),
                "has_materials": bool(obj.data.materials) and all(obj.data.materials),
                "missing_textures": missing_textures, "blender_version": bpy.app.version_string}
+    metrics["welded_vertices"] = welded_vertices
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     # Export only the asset, before cameras and lights are added.
     bpy.ops.export_scene.gltf(filepath=str(out / "asset-clean.glb"), export_format="GLB",

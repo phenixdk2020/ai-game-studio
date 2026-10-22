@@ -1,27 +1,29 @@
 # Prop pipeline implementation and local validation
 
-Status: software implementation with isolated automated tests. No actual Hunyuan,
-Blender or Unreal execution has been performed by this coding agent. M1 is pending.
+Status: software implementation plus a real local synthetic-prop smoke test on
+2026-10-22 with Blender 5.2.2 LTS and Unreal 5.7.1. See
+[local integration evidence](INTEGRATION-2026-10-22.md). Hunyuan generation, the actual
+sword/NinjaFrog path and full M1 acceptance remain pending.
 
 ## Implemented backlog slices
 
 | Backlog | Implementation | Remaining evidence/work |
 | --- | --- | --- |
-| P0-001 | Worker reads legacy arrays, single tasks and value/Count wrappers; removes null entries; adds schemaVersion/defaults; atomically writes UTF-8 arrays; worker rejects stale queue revisions | GUI uses its existing writer; a fully shared transactional writer remains pending |
+| P0-001 | Worker reads legacy arrays, single tasks and value/Count wrappers; removes null entries; adds schemaVersion/defaults; atomically writes UTF-8 arrays; shared GUI/worker transaction lock, revision checks and worker field merges | Older running GUI/worker versions must be restarted |
 | P0-002 | Exclusive OS-held worker lock with PID/version; process death releases handle | GUI version indicator; existing older workers do not honor this lock |
 | P0-004 | Task-local immutable attempt directories, checksums, metadata and manifests | Retention/cleanup policy |
 | P0-010 | Raw Base64, content type and GLB validation, rejected response preservation | Real API compatibility and Blender readability |
-| P0-020/021/022 | GLB import, preserve transforms, join prop meshes, remove loose vertices, recalculate normals, optional size/orientation, center/bottom pivot | Actual Blender run and visual inspection |
-| P0-026 | Three orthographic CPU-rendered PNG previews | Visual inspection on a real mesh |
+| P0-020/021/022 | GLB import, preserve transforms, join prop meshes, remove loose vertices, recalculate normals, optional size/orientation, center/bottom pivot | Validated with a synthetic prop; real generated mesh inspection remains |
+| P0-026 | Three orthographic CPU-rendered PNG previews | Synthetic prop inspected; generated-asset inspection remains |
 | P0-030/031 | QA JSON/Markdown with thresholds and an import gate | Artistic/visual quality, normal direction, scale against references |
-| P0-040/041 | Allowed project roots, unambiguous .uproject, explicit plugins, automated FBX StaticMesh import, dependency save, fresh namespace | Actual Unreal 5.7 integration run |
+| P0-040/041 | Allowed project roots, unambiguous .uproject, explicit plugins, automated FBX StaticMesh import, dependency save, fresh namespace | Synthetic-prop import validated on Unreal 5.7.1; NinjaFrog validation remains |
 | P0-042 | Requests automatic collision; Unreal QA checks saved collision, LOD count, UV, materials and triangle budget | Actual collision behavior, additional LOD generation, Nanite policy and texture fidelity |
-| P0-043 | Optional separate QA commandlet creates/saves isolated test map, spawns imported mesh, and exports offscreen PNG with a nonuniform-pixel check | Real Unreal run and operator visual review |
+| P0-043 | Optional separate full-editor QA process creates/saves isolated test map, spawns imported mesh, and exports offscreen PNG with a nonuniform-pixel check | Synthetic prop visually checked; production visual acceptance remains |
 | P0-044 | Worker returns status, resultPath, qaStatus and manifest path to queue | Dedicated GUI preview/output controls |
 
 Automatic remediation, async Hunyuan, multiview, texture generation, character work,
 full state machine and dependency graph are not implemented. Unreal test-map and
-screenshot adapters are implemented but have not been run against the real engine.
+screenshot adapters have been run against the real engine with a synthetic prop.
 
 ## Configuration
 
@@ -29,7 +31,7 @@ screenshot adapters are implemented but have not been run against the real engin
 Blender and Unreal executable paths and allowed Unreal project roots before running.
 Use `--config path/to/machine.local.json` for local overrides (a complete config).
 The supplied executable paths come from the existing studio configuration; their
-existence/version has not been assumed or verified. Python requires 3.12.
+existence/version was verified for the local smoke test; other machines must verify them. Python requires 3.12.
 
 Input must be a GLB contained within `jobs_root/<taskId>`. Relative input paths are
 resolved against that task directory. Traversal and symlink escape are rejected.
@@ -65,7 +67,7 @@ standard library and adds filesystem/GLB checks.
 ## Local ALIEN validation sequence
 
 Run from the repository root. These are instructions for the local operator; they
-have not been executed against the real tool installations.
+are the operator workflow; the isolated synthetic-prop variant has been executed locally.
 
 ```powershell
 # Validation only: no writes or external process launches.
@@ -139,19 +141,21 @@ their direction is not independently verified by QA.
 
 Successful Blender processing returns `ReadyForUnreal`. Successful import returns
 `ReadyForUnrealQA`. With `--target unreal-qa`, saved StaticMeshes are reloaded in a
-separate commandlet; geometry, UV, material slots, simple/convex collision and LOD
+separate full-editor process; geometry, UV, material slots, simple/convex collision and LOD
 count are checked against `unreal_qa` configuration. Negative API results fail.
 Default minimum LOD count is 1 (LOD0); this does not imply generated distance LODs.
 After QA, a fresh map is saved under the assigned import namespace with spawned
 mesh actors and dynamic lighting. An existing test map is never overwritten.
 
 Without rendering, status is `AwaitingScreenshot`. With `--capture`, the validation
-commandlet uses `-AllowCommandletRendering -RenderOffscreen` instead of `-nullrhi`.
+process uses `-ExecutePythonScript` and `-RenderOffscreen` with rendering enabled.
+Without capture it also uses `-nullrhi`. Python commandlets lack the required editor
+subsystems and are used only for the import stage.
 A SceneCapture2D exports a 640x640 PNG. Empty/uniform pixel data, missing files and
 non-PNG output fail the stage; render targets and transient capture actors are
 released even on failure. The actor remains in the saved test map, but the capture
 actor is transient and is not saved. Shader/render startup problems may require a
-local retry; offscreen engine compatibility is not yet established.
+local retry; offscreen capture has been exercised locally on Unreal 5.7.1.
 
 Successful capture returns `AwaitingVisualReview`, never `Completed`. A pipeline
 preview proves that rendering returned nonuniform data, not that the asset looks
@@ -179,18 +183,27 @@ them before resuming after a forced termination. Fresh attempts/import namespace
 preserve earlier outputs.
 
 The persistent queue `.worker.lock` also uses an OS-held handle and can be reacquired
-after a crash without deleting the file. That queue lock protects this worker
-version only, not GUI writers or older versions. Queue reads capture a SHA256 revision
-of exactly the bytes parsed. Before publishing a new queue, the worker compares the
-current file revision with its last read/write revision. If the GUI changed or deleted
-the queue in the meantime, the worker stops with a revision-conflict error, preserves
-the GUI data and removes its temporary write file. Reload/restart after reviewing the
-conflict; do not bypass it by overwriting the queue.
+after a crash without deleting the file. That long-lived queue lock prevents a second worker. A separate, short-lived
+`queue.gui.json.transaction.lock` serializes revision-check/merge/replace operations
+for the worker and `tools/project-manager-gui.ps1`. The transaction handle is released
+on process exit. No queue transaction is held while running Blender, Unreal or an API
+request. Stale GUI snapshots are rejected with an error dialog rather than silently
+replacing worker progress. Input forms also reject stale edits when another writer
+changed their displayed inputs; background refresh pauses while a form control has
+keyboard focus.
 
-Revision checking detects edits already present at the pre-write check. It is not a
-fully transactional cross-process compare-and-swap: an uncoordinated GUI writer can
-still race in the final check/replace window. Shared GUI/worker queue transactions
-remain pending. Avoid simultaneous queue edits during worker processing.
+The worker applies a three-way field merge against the latest queue under that lock.
+New GUI tasks and unrelated priority/task changes survive repeated worker progress
+writes. Concurrent changes to the same property, changed job inputs, task deletion,
+pause and cancellation stop the worker update. Control changes are observed at the
+next queue write; this does not immediately interrupt an already-running external
+process or HTTP request. Existing generated evidence is kept.
+
+Restart the GUI and worker after updating: an already-running old GUI retains its old
+writer. The older `gui/project-manager.ps1` uses a different `data/queue.json` backend
+and does not participate in this queue. Other tools that write `tasks/queue.gui.json`
+must use the shared module; uncoordinated legacy writers are outside the transaction
+guarantee. No production queue was opened or migrated by these integration tests.
 
 CLI failures return a structured JSON error on stdout and readable text on stderr,
 including errors before a new manifest can be written. The worker copies the current
@@ -220,3 +233,21 @@ Additional Unreal QA API references:
 - [LevelEditorSubsystem](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/LevelEditorSubsystem?application_version=5.7)
 - [RenderingLibrary](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/RenderingLibrary?application_version=5.7)
 - [SceneCaptureComponent2D](https://dev.epicgames.com/documentation/en-us/unreal-engine/python-api/class/SceneCaptureComponent2D?application_version=5.7)
+
+- [Unreal full-editor Python startup](https://dev.epicgames.com/documentation/en-us/unreal-engine/scripting-the-unreal-editor-using-python)
+
+Real QA also found that editor subsystems are not instantiated by the Python
+commandlet path. QA/test maps therefore use `-ExecutePythonScript` (full editor
+startup) while import continues to use the lighter Python commandlet. Preview
+captures use a fixed manual exposure, independent of eye-adaptation history.
+
+The real Blender regression is opt-in and does not use production assets:
+
+```powershell
+$env:AI_STUDIO_BLENDER_TEST_EXE = 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe'
+python -m unittest discover -s tests -p test_blender_geometry_integration.py -v
+```
+
+It verifies closed topology, UV retention and outward normals after glTF seam welding.
+Normal cleanup welds coincident vertices with a tolerance of 1e-8 meters before
+recalculation. The synthetic fixture passes with no non-manifold warning.

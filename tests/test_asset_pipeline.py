@@ -235,8 +235,9 @@ class AssetPipelineTests(unittest.TestCase):
         result = pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,
                               target="unreal-qa", capture=True, resume=True, runner=runner)
         self.assertEqual(result["status"], "AwaitingVisualReview")
-        self.assertIn("-AllowCommandletRendering", self.calls[-1][0])
         self.assertIn("-RenderOffscreen", self.calls[-1][0])
+        self.assertNotIn("-run=pythonscript", self.calls[-1][0])
+        self.assertTrue(any(arg.startswith("-ExecutePythonScript=") for arg in self.calls[-1][0]))
         self.assertNotIn("-nullrhi", self.calls[-1][0])
         self.assertEqual(len(self.calls), 4)  # Blender, import, QA without render, QA with render.
         pipeline.run(self.job, self.config, approve_blender=True, approve_unreal=True,

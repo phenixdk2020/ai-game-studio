@@ -349,11 +349,13 @@ def run(job, config, *, approve_blender=False, approve_unreal=False, target="ble
                 validation_job_path = output / (validation_id + "-job.json")
                 write_json(validation_job_path, validation_job)
                 env = {**os.environ, "AI_STUDIO_UNREAL_VALIDATION_JOB": str(validation_job_path)}
-                rendering = ["-AllowCommandletRendering", "-RenderOffscreen"] if capture else ["-nullrhi"]
+                # Editor subsystems are unavailable in Python commandlets. This stage needs
+                # the full editor startup path, with its window rendered offscreen.
+                rendering = ["-RenderOffscreen"] if capture else ["-RenderOffscreen", "-nullrhi"]
                 manifest.update(status="Running", stage="unreal-qa", unrealValidationJob=str(validation_job_path))
                 save()
                 run_tool([unreal_editor, str(project), "-unattended", "-nop4", "-nosplash", *rendering,
-                          "-run=pythonscript", "-script=" + str(HERE / "unreal_validation_runtime.py")],
+                          "-ExecutePythonScript=" + str(HERE / "unreal_validation_runtime.py")],
                          output, validation_id, config.get("unreal_timeout", 1800), runner, env)
                 validation = read_json(validation_job["report"])
                 if (validation.get("status") != "validated" or validation.get("levelPath") != validation_job["level_path"]

@@ -132,6 +132,113 @@ if ($script:calls -ne 1) { throw 'Existing output was not protected' }
                          .replace("__WORKER__", str(ROOT / "tools" / "project-manager-worker.ps1"))
                          .replace("__TEMP__", folder))
 
+    def test_worker_merges_gui_additions_and_stops_on_control_or_input_edits(self):
+        with TemporaryDirectory() as folder:
+            source = r'''
+Import-Module '__MODULE__' -Force
+$path = Join-Path '__TEMP__' 'queue.json'
+Write-StudioQueue -Path $path -Items @([pscustomobject]@{id='TASK-1'; status='Running'; title='Sword'})
+$base = Get-StudioQueueSnapshot -Path $path
+$local = @($base.Tasks | ConvertTo-Json -Depth 40 | ConvertFrom-Json)
+$local[0].progressPercent = 10
+$gui = Get-StudioQueueSnapshot -Path $path
+$gui.Tasks[0].priority = 99
+Write-StudioQueue -Path $path -Items @($gui.Tasks + [pscustomobject]@{id='TASK-2'; title='Added in GUI'}) -ExpectedRevision $gui.Revision
+$merged = Write-StudioQueue -Path $path -Items $local -BaseItems $base.Tasks -ExpectedRevision $base.Revision -PassThruSnapshot
+if ($merged.Tasks.Count -ne 2 -or $merged.Tasks[0].priority -ne 99 -or $merged.Tasks[0].progressPercent -ne 10) { throw 'Three-way merge lost changes' }
+$nextBase = @($local | ConvertTo-Json -Depth 40 | ConvertFrom-Json)
+$local[0].progressPercent = 20
+$merged = Write-StudioQueue -Path $path -Items $local -BaseItems $nextBase -ExpectedRevision $merged.Revision -PassThruSnapshot
+if ($merged.Tasks.Count -ne 2 -or $merged.Tasks[0].progressPercent -ne 20) { throw 'Second update lost GUI task' }
+foreach ($change in @('Cancelled', 'Paused', 'Input')) {
+    $base = Get-StudioQueueSnapshot -Path $path
+    $local = @($base.Tasks | ConvertTo-Json -Depth 40 | ConvertFrom-Json)
+    $local[0].progressPercent += 1
+    $gui = Get-StudioQueueSnapshot -Path $path
+    if ($change -eq 'Input') { $gui.Tasks[0].title = 'Changed input' } else { $gui.Tasks[0].status = $change }
+    Write-StudioQueue -Path $path -Items $gui.Tasks -ExpectedRevision $gui.Revision
+    $before = [IO.File]::ReadAllText($path)
+    $blocked = $false
+    try { Write-StudioQueue -Path $path -Items $local -BaseItems $base.Tasks -ExpectedRevision $base.Revision } catch { $blocked = $true }
+    if (-not $blocked -or [IO.File]::ReadAllText($path) -ne $before) { throw "Control/input update was overwritten: $change" }
+}
+'''
+            self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Studio.Queue.psm1"))
+                         .replace("__TEMP__", folder))
+
+    def test_two_writers_share_transaction_lock(self):
+        with TemporaryDirectory() as folder:
+            directory = Path(folder)
+            queue = directory / "queue.json"
+            queue.write_text('[{"id":"TASK-1","title":"initial"}]')
+            script = directory / "writer.ps1"
+            script.write_text(r'''
+param($Module, $QueuePath, $Barrier, $Name)
+$ErrorActionPreference='Stop'
+Import-Module $Module -Force
+$snapshot = Get-StudioQueueSnapshot -Path $QueuePath
+[IO.File]::WriteAllText(($Barrier + '.' + $Name), 'ready')
+while (-not (Test-Path $Barrier)) { Start-Sleep -Milliseconds 20 }
+$snapshot.Tasks[0].title = $Name
+try { Write-StudioQueue -Path $QueuePath -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision; exit 0 }
+catch { if ($_.Exception.Message -match 'revision conflict') { exit 3 }; throw }
+''', encoding="utf-8-sig")
+            children = [subprocess.Popen(["pwsh", "-NoProfile", "-File", str(script),
+                str(ROOT / "adapters" / "Studio.Queue.psm1"), str(queue), str(directory / "go"), name],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for name in ("one", "two")]
+            try:
+                import time
+                deadline = time.monotonic() + 15
+                while not all((directory / ("go." + name)).exists() for name in ("one", "two")):
+                    if time.monotonic() > deadline:
+                        self.fail("Writer startup timed out")
+                    time.sleep(0.02)
+                (directory / "go").write_text("release")
+                outputs = [child.communicate(timeout=15) for child in children]
+                self.assertEqual(sorted(child.returncode for child in children), [0, 3], outputs)
+                self.assertIn(json.loads(queue.read_text())[0]["title"], ("one", "two"))
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.kill()
+                        child.communicate(timeout=5)
+
+    def test_gui_uses_shared_revision_writer_and_valid_source(self):
+        with TemporaryDirectory() as folder:
+            source = r'''
+Import-Module '__MODULE__' -Force
+$tokens = $null; $parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile('__GUI__', [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw 'GUI PowerShell parser error' }
+foreach ($name in @('ReadQ','WriteQ','Assert-EditableTaskCurrent')) {
+    $definition = $ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true)
+    Invoke-Expression $definition.Extent.Text
+}
+$q = Join-Path '__TEMP__' 'queue.json'
+Write-StudioQueue -Path $q -Items @([pscustomobject]@{id='TASK-1';title='Initial'})
+$gui = @(ReadQ)
+$worker = Get-StudioQueueSnapshot -Path $q
+$worker.Tasks[0].progressPercent = 40
+Write-StudioQueue -Path $q -Items $worker.Tasks -ExpectedRevision $worker.Revision
+$gui[0].title = 'Unsaved edit'
+$blocked = $false
+try { WriteQ $gui } catch { $blocked = $true }
+if (-not $blocked) { throw 'GUI stale save overwrote worker progress' }
+$gui = @(ReadQ)
+$gui[0].title = 'Fresh edit'
+WriteQ $gui
+$saved = @(Read-StudioQueue -Path $q)
+if ($saved[0].title -ne 'Fresh edit' -or $saved[0].progressPercent -ne 40) { throw 'GUI roundtrip lost worker state' }
+$displayed = @($saved | ConvertTo-Json -Depth 40 | ConvertFrom-Json)[0]
+$saved[0].description = 'Changed while form was open'
+$blocked = $false
+try { Assert-EditableTaskCurrent $displayed $saved[0] } catch { $blocked = $true }
+if (-not $blocked) { throw 'A stale edit form was allowed to overwrite changed input' }
+'''
+            self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Studio.Queue.psm1"))
+                         .replace("__GUI__", str(ROOT / "tools" / "project-manager-gui.ps1"))
+                         .replace("__TEMP__", folder))
+
     def test_asset_worker_approval_bridge_and_result(self):
         with TemporaryDirectory() as folder:
             source = r'''
