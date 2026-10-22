@@ -56,8 +56,9 @@ tasks; the LLM does not directly execute arbitrary commands or mark jobs complet
 ## Copilot/GitHub bridge status
 
 A local copilot.exe executable and gh agent-task command were found on this machine.
-No paid Copilot task was started during implementation validation. Both Copilot
-providers are connected through the same task/result contract. Direct standalone
+The subsequent [live test](COPILOT-LIVE-2026-10-22.md) verified local Copilot through
+local tests and draft PR creation; cloud-agent dispatch was refused with 403 and
+remains unverified end to end. Both Copilot providers use the same task/result contract. Direct standalone
 dispatch helpers remain manual tools outside the authoritative queue.
 
 Receipts record dispatch/session/PR IDs, progress, isolated checkout, exact validated
