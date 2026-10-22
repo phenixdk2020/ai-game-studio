@@ -19,6 +19,16 @@
             attachments = @(); dependencies = @(); priority = 10
             attempt = 0; maxAttempts = 3; progressPercent = 0; progressText = ''
             pipelineStage = ''; error = ''; resultPath = ''
+            backend = 'auto'; role = ''; kind = 'task'; projectPath = ''
+        }
+        foreach ($mapping in @(@('references','attachments'), @('dependsOn','dependencies'), @('result_file','resultPath'), @('lastError','error'))) {
+            if ($task.PSObject.Properties.Name -contains $mapping[0] -and $task.PSObject.Properties.Name -notcontains $mapping[1]) {
+                $task | Add-Member -NotePropertyName $mapping[1] -NotePropertyValue $task.($mapping[0])
+            }
+        }
+        if ($task.priority -is [string]) {
+            $rank = @{ critical=0; high=5; normal=10; low=20 }
+            if ($rank.ContainsKey($task.priority)) { $task.priority = $rank[$task.priority] }
         }
         foreach ($key in $defaults.Keys) {
             if ($task.PSObject.Properties.Name -notcontains $key) {
@@ -27,6 +37,11 @@
         }
         if ($null -eq $task.attachments) { $task.attachments = @() }
         if ($null -eq $task.dependencies) { $task.dependencies = @() }
+        foreach ($field in @('attachments','dependencies')) {
+            if ($task.$field -is [string] -or @($task.$field | Where-Object { $_ -isnot [string] }).Count) { throw "$field must be an array of strings." }
+        }
+        $statusMap = @{ PENDING='Queued'; READY='Queued'; DONE='Completed'; REVIEW='AwaitingCodeReview'; FAILED='Failed'; RUNNING='Running'; COMPLETED='Completed'; QUEUED='Queued'; CANCELLED='Cancelled' }
+        if ($statusMap.ContainsKey([string]$task.status)) { $task.status = $statusMap[[string]$task.status] }
         $task
     }
 }
@@ -129,7 +144,7 @@ function Merge-StudioWorkerUpdate {
         if ($latest.status -in @('Cancelled', 'Paused') -and $latest.status -ne $old.status) {
             throw "Queue conflict: task $id was paused or cancelled. Worker update stopped."
         }
-        foreach ($name in @('title','description','attachments','projectPath','agent','newProject')) {
+        foreach ($name in @('title','description','attachments','projectPath','agent','newProject','backend','role','kind','dependencies')) {
             if ((Get-StudioPropertyJson $latest $name) -ne (Get-StudioPropertyJson $old $name)) {
                 throw "Queue conflict: task $id input changed ($name). Reload before continuing."
             }

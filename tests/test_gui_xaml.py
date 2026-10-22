@@ -38,7 +38,10 @@ class GuiViewTests(unittest.TestCase):
                 "$window=[Windows.Markup.XamlReader]::Load($reader); "
                 "foreach($name in @('Queue','WorkerBtn','SaveBtn','Feedback','Title')) { "
                 "if($null -eq $window.FindName($name)){throw ('Missing control: '+$name)} }; "
-                "if($window.IsVisible){throw 'Unexpected visible window'}; $window.Close()"
+                "if($window.IsVisible){throw 'Unexpected visible window'}; "
+                "foreach($name in @('Agent','NewBtn','SaveBtn','WorkerBtn','Queue','Title','Description','Attachments','ProjectPath')){Set-Variable $name $window.FindName($name)}; "
+                ". '" + str(GUI.parents[1]/'adapters/Studio.Gui.ps1').replace("'", "''") + "'; "
+                "if($Backend.Items.Count -ne 5 -or $null -eq $Dependencies -or $null -eq $SpecialistsEnabled){throw 'Unified controls missing'}; $window.Close()"
             )
             result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command],
                                     capture_output=True, timeout=30)

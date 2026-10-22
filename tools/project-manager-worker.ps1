@@ -1,6 +1,9 @@
 ﻿param(
     [string]$Root = 'C:\ai-game-studio',
     [switch]$Once,
+    [switch]$EnableSpecialists,
+    [int]$PollSeconds = 2,
+    [string]$OrchestratorConfig = '',
     [switch]$ProcessAssets,
     [switch]$ApproveBlenderWrite,
     [switch]$ApproveUnrealWrite,
@@ -13,6 +16,9 @@
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Hunyuan.Response.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Queue.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Orchestrator.psm1') -Force
+if (-not $OrchestratorConfig) { $OrchestratorConfig = Join-Path $Root 'config\orchestrator.json' }
+if ($PollSeconds -lt 1) { throw 'PollSeconds must be positive.' }
 if (-not $AssetConfig) { $AssetConfig = Join-Path $Root 'config\asset-pipeline.json' }
 if (($ValidateUnreal -or $CaptureUnrealPreview) -and (-not $ProcessAssets -or -not $ApproveUnrealWrite)) {
     throw 'Unreal validation/capture requires -ProcessAssets and -ApproveUnrealWrite.'
@@ -66,6 +72,50 @@ function Write-Queue {
     $written = Write-StudioQueue -Path $queuePath -Items $Items -ExpectedRevision $script:queueRevision -BaseItems $base -PassThruSnapshot
     $script:queueRevision = $written.Revision
     $script:queueBaseJson = ConvertTo-Json -InputObject @($Items) -Depth 40 -Compress
+}
+
+function Invoke-SpecialistTask {
+    param($Task, [array]$Queue, [string]$Backend)
+    Set-TaskProperty $Task 'backend' $Backend
+    if (-not $EnableSpecialists) {
+        Set-TaskProperty $Task 'status' 'WaitingForApproval'
+        Set-TaskProperty $Task 'question' 'Enable specialist/Copilot backends and retry to dispatch this task.'
+        Write-Queue -Items $Queue
+        return
+    }
+    $taskDirectory = Join-Path $jobRoot $Task.id
+    if ($Task.id -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$') { throw 'Invalid task id.' }
+    $dependencyResults = @(foreach ($dependencyId in $Task.dependencies) {
+        $dependency = @($Queue | Where-Object id -eq $dependencyId)[0]
+        $content = ''
+        if ($dependency.resultPath -and (Test-Path -LiteralPath $dependency.resultPath -PathType Leaf)) {
+            $content = Get-Content -LiteralPath $dependency.resultPath -Raw -Encoding UTF8
+            if ($content.Length -gt 16000) { $content = $content.Substring(0,16000) }
+        }
+        [pscustomobject]@{id=$dependencyId;title=$dependency.title;prUrl=$dependency.prUrl;result=$content}
+    })
+    Set-TaskProperty $Task 'dependencyResults' $dependencyResults
+    New-Item -ItemType Directory -Force -Path $taskDirectory | Out-Null
+    $taskFile = Join-Path $taskDirectory 'bridge-task.json'
+    [IO.File]::WriteAllText($taskFile, ($Task | ConvertTo-Json -Depth 40), $utf8)
+    if ($Task.status -eq 'Queued') {
+        Set-TaskProperty $Task 'attempt' ([int]$Task.attempt + 1)
+        Set-TaskProperty $Task 'status' 'Running'
+        Set-TaskProperty $Task 'pipelineStage' 'specialist-dispatch'
+        Write-Queue -Items $Queue
+    }
+    $arguments = @((Join-Path $Root 'adapters\project_bridge.py'), $taskFile, '--config', $OrchestratorConfig, '--approve-dispatch')
+    if ($Task.bridgeAction -eq 'revalidate') { $arguments += '--revalidate' }
+    $lines = @(& $Python @arguments)
+    $response = ($lines -join "`n") | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw $response.error }
+    Set-TaskProperty $Task 'bridgeAction' ''
+    foreach ($name in @('status','backend','role','pipelineStage','resultPath','bridgeReceipt','prUrl','sessionId','validatedHead','error','question','nextPollAt')) {
+        if ($response.PSObject.Properties.Name -contains $name) { Set-TaskProperty $Task $name $response.$name }
+    }
+    Set-TaskProperty $Task 'updatedAt' ([DateTime]::UtcNow.ToString('o'))
+    [IO.File]::WriteAllText($taskFile, ($Task | ConvertTo-Json -Depth 40), $utf8)
+    Write-Queue -Items $Queue
 }
 
 function Invoke-AssetStages {
@@ -359,35 +409,37 @@ function Invoke-HunyuanGeneration {
     return $outputFile
 }
 
-$workerLock = Enter-StudioWorkerLock -Path ($queuePath + '.worker.lock') -Version '17.0'
+$workerLock = Enter-StudioWorkerLock -Path ($queuePath + '.worker.lock') -Version '18.0'
 try {
-    Write-WorkerLog -Message 'Pipeline worker v17.0 started'
+    Write-WorkerLog -Message 'Studio orchestrator v18.0 started'
     while ($true) {
         $queue = @(Read-Queue)
-        $task = $queue |
-            Where-Object { $_.status -eq 'Queued' -or ($ProcessAssets -and ($_.status -eq 'QueuedForBlender' -or ($ApproveUnrealWrite -and ($_.status -eq 'ReadyForUnreal' -or (($ValidateUnreal -or $CaptureUnrealPreview) -and $_.status -eq 'ReadyForUnrealQA') -or ($CaptureUnrealPreview -and $_.status -eq 'AwaitingScreenshot'))))) } |
-            Sort-Object priority, createdAt |
-            Select-Object -First 1
+        $task = Get-StudioReadyTask -Tasks $queue -ProcessAssets:$ProcessAssets -ApproveUnrealWrite:$ApproveUnrealWrite -ValidateUnreal:$ValidateUnreal -CaptureUnrealPreview:$CaptureUnrealPreview
 
         if (-not $task) {
             if ($Once) {
                 break
             }
-            Start-Sleep -Seconds 2
-            continue
-        }
-
-        if (-not (Test-Is3DTask -Task $task)) {
-            Set-TaskProperty -Task $task -Name 'status' -Value 'NeedsInput'
-            Set-TaskProperty -Task $task -Name 'question' `
-                -Value 'Worker v16.1 currently handles 3D asset jobs only.'
-            Write-Queue -Items $queue
-            if ($Once) { break }
+            Start-Sleep -Seconds $PollSeconds
             continue
         }
 
         try {
-            Set-TaskProperty $task 'workerVersion' '17.0'
+            Set-TaskProperty $task 'workerVersion' '18.0'
+            $backend = Get-StudioBackend -Task $task
+            if ($backend -ne 'asset3d') {
+                Invoke-SpecialistTask -Task $task -Queue $queue -Backend $backend
+                if ($Once) { break }
+                Start-Sleep -Seconds $PollSeconds
+                continue
+            }
+            if (-not $ProcessAssets) {
+                Set-TaskProperty $task 'status' 'WaitingForApproval'
+                Set-TaskProperty $task 'question' 'Enable 3D processing and retry this task.'
+                Write-Queue -Items $queue
+                if ($Once) { break }
+                continue
+            }
             if ($ProcessAssets -and ($task.status -in @('QueuedForBlender', 'ReadyForUnreal', 'ReadyForUnrealQA', 'AwaitingScreenshot') -or
                 ($task.hunyuanOutput -and (Test-Path -LiteralPath $task.hunyuanOutput)))) {
                 Invoke-AssetStages -Task $task -Queue $queue
@@ -436,7 +488,7 @@ try {
             Set-TaskProperty -Task $task -Name 'status' -Value 'Failed'
             Set-TaskProperty -Task $task -Name 'error' -Value $_.Exception.Message
             Set-TaskProperty -Task $task -Name 'question' `
-                -Value 'Asset automation failed. Open the worker log and asset manifest for details.'
+                -Value 'Orchestrator task failed. Open the worker log and task receipt/manifest for details.'
             Set-TaskProperty -Task $task -Name 'updatedAt' `
                 -Value ([DateTime]::Now.ToString('o'))
             Write-Queue -Items $queue
@@ -452,5 +504,5 @@ try {
 }
 finally {
     $workerLock.Dispose()
-    Write-WorkerLog -Message 'Pipeline worker v17.0 stopped'
+    Write-WorkerLog -Message 'Studio orchestrator v18.0 stopped'
 }

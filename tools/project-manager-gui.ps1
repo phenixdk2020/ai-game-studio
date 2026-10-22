@@ -2,9 +2,10 @@
 Add-Type -AssemblyName PresentationFramework,PresentationCore,WindowsBase,System.Windows.Forms
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Queue.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot '..\adapters\Studio.Orchestrator.psm1') -Force
 $q=Join-Path $Root 'tasks\queue.gui.json'; New-Item -ItemType Directory -Force -Path (Split-Path $q),(Join-Path $Root 'results'),(Join-Path $Root 'logs'),(Join-Path $Root 'state')|Out-Null;if(!(Test-Path $q)){try { Write-StudioQueue -Path $q -Items @() -ExpectedRevision 'missing' } catch { if(!(Test-Path $q)){throw} }}
 [xml]$x=@'
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="AI Game Studio - Project Manager v17.1" Height="850" Width="1320" WindowStartupLocation="CenterScreen" Background="#0F172A" FontFamily="Segoe UI" FontSize="14">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="AI Game Studio - Project Manager v18" Height="850" Width="1320" WindowStartupLocation="CenterScreen" Background="#0F172A" FontFamily="Segoe UI" FontSize="14">
 <Window.Resources>
 <Style TargetType="Button"><Setter Property="Margin" Value="4"/><Setter Property="Padding" Value="12,7"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
 <Style TargetType="TextBox"><Setter Property="Margin" Value="0,4,0,10"/><Setter Property="Padding" Value="7"/><Setter Property="Background" Value="White"/><Setter Property="Foreground" Value="#111827"/><Setter Property="BorderBrush" Value="#94A3B8"/></Style>
@@ -43,18 +44,35 @@ function ReadQ {
     $script:guiRevision = $snapshot.Revision
     $snapshot.Tasks
 }
+function Save-StudioForm {
+    if ([string]::IsNullOrWhiteSpace($Title.Text)) { throw 'Angiv en titel.' }
+    $snapshot = Get-StudioQueueSnapshot -Path $q
+    $selected = $Queue.SelectedItem
+    if ($selected) {
+        $task = @($snapshot.Tasks | Where-Object id -eq $selected.id)[0]
+        Assert-EditableTaskCurrent $selected $task
+    } else {
+        $task = [pscustomobject]@{id=('TASK-'+[guid]::NewGuid().ToString('N').Substring(0,20).ToUpper());status='Queued';priority=10;createdAt=[DateTime]::UtcNow.ToString('o')}
+        $snapshot.Tasks = @($snapshot.Tasks + $task)
+    }
+    foreach ($pair in @(@('title',$Title.Text),@('description',$Description.Text),@('agent',$Agent.Text),@('role',$Agent.Text),@('backend',[string]$Backend.SelectedItem),@('dependencies',@($Dependencies.Text -split '[,\s]+'|Where-Object {$_})),@('projectPath',$ProjectPath.Text),@('newProject',[bool]$NewProject.IsChecked),@('attachments',@($Attachments.Items)),@('updatedAt',[DateTime]::UtcNow.ToString('o')))) {
+        $task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force
+    }
+    Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision
+    RefreshQ
+}
 function WriteQ($items) {
     $script:guiRevision = Write-StudioQueue -Path $q -Items $items -ExpectedRevision $script:guiRevision -PassThruRevision
 }
 function Assert-EditableTaskCurrent($displayed, $fresh) {
     if (-not $fresh) { throw 'The selected task was deleted. Refresh before saving.' }
-    foreach ($name in @('title','description','agent','projectPath','newProject','attachments')) {
+    foreach ($name in @('title','description','agent','backend','dependencies','projectPath','newProject','attachments')) {
         $before = ConvertTo-Json -InputObject $displayed.$name -Depth 40 -Compress
         $current = ConvertTo-Json -InputObject $fresh.$name -Depth 40 -Compress
         if ($before -ne $current) { throw "Task input changed elsewhere ($name). Refresh before saving your edit." }
     }
 }
-function RefreshQ{if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
+function RefreshQ{if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
 function ClearForm{$Title.Text='';$Description.Text='';$Agent.Text='auto';$ProjectPath.Text='';$NewProject.IsChecked=$false;$Attachments.Items.Clear();$Question.Text='';$Feedback.Text=''}
 function MoveTask([int]$d){$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ|Sort-Object priority);$sel=$a|?{$_.id-eq$t.id}|Select-Object -First 1;if(!$sel){return};$i=[array]::IndexOf($a,$sel);$n=$i+$d;if($n-lt 0-or$n-ge$a.Count){return};$tmp=$a[$i];$a[$i]=$a[$n];$a[$n]=$tmp;for($j=0;$j-lt$a.Count;$j++){$a[$j].priority=$j+1};WriteQ $a;RefreshQ}
 function PaintPipeline($t){
@@ -75,11 +93,12 @@ function PaintPipeline($t){
 }
 $Queue.Add_SelectionChanged({$t=$Queue.SelectedItem;if(!$t){return};$Title.Text=[string]$t.title;$Description.Text=[string]$t.description;$Agent.Text=[string]$t.agent;$ProjectPath.Text=[string]$t.projectPath;$NewProject.IsChecked=[bool]$t.newProject;$Attachments.Items.Clear();@($t.attachments)|%{[void]$Attachments.Items.Add($_)};$Question.Text=[string]$t.question;PaintPipeline $t;if($t.resultPath-and(Test-Path -LiteralPath $t.resultPath -PathType Leaf)){$Feedback.Text=Get-Content -LiteralPath $t.resultPath -Raw}else{$Feedback.Text="ID: $($t.id)`r`nStatus: $($t.status)`r`nAgent: $($t.agent)`r`nPipeline: $($t.pipeline)`r`nStage: $($t.pipelineStage)`r`nError: $($t.error)"}})
 $NewBtn.Add_Click({$Queue.SelectedItem=$null;ClearForm})
-$SaveBtn.Add_Click({if([string]::IsNullOrWhiteSpace($Title.Text)){[Windows.MessageBox]::Show('Angiv en titel.')|Out-Null;return};$a=@(ReadQ);$t=$Queue.SelectedItem;if($t){$i=$a|?{$_.id-eq$t.id}|Select-Object -First 1;Assert-EditableTaskCurrent $t $i}else{$i=[pscustomobject]@{id='TASK-'+(Get-Date -Format yyyyMMdd-HHmmss)+'-'+([guid]::NewGuid().ToString('N').Substring(0,6).ToUpper());createdAt=[DateTime]::Now.ToString('o');status='Queued';priority=$a.Count+1;question='';resultPath='';error='';pipeline='';pipelineStage=''};$a+=@($i)};foreach($pair in @(@('title',$Title.Text),@('description',$Description.Text),@('agent',$Agent.Text),@('projectPath',$ProjectPath.Text),@('newProject',[bool]$NewProject.IsChecked),@('attachments',@($Attachments.Items)),@('updatedAt',[DateTime]::Now.ToString('o')))){if($i.PSObject.Properties.Name -contains $pair[0]){$i.($pair[0])=$pair[1]}else{$i|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1]}};if($i.status-eq'NeedsInput'){$i.status='Queued';$i.question=''};WriteQ $a;RefreshQ})
+$SaveBtn.Add_Click({Invoke-StudioUiAction {Save-StudioForm}})
 $PauseBtn.Add_Click({$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ);$i=$a|?{$_.id-eq$t.id}|Select-Object -First 1;$i.status=if($i.status-eq'Paused'){'Queued'}else{'Paused'};WriteQ $a;RefreshQ});$CancelBtn.Add_Click({$t=$Queue.SelectedItem;if($t){$a=@(ReadQ);($a|?{$_.id-eq$t.id}).status='Cancelled';WriteQ $a;RefreshQ}});$DeleteBtn.Add_Click({$t=$Queue.SelectedItem;if($t){WriteQ @(ReadQ|?{$_.id-ne$t.id});ClearForm;RefreshQ}});$UpBtn.Add_Click({MoveTask -1});$DownBtn.Add_Click({MoveTask 1})
 $RetryBtn.Add_Click({$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ);$i=$a|?{$_.id-eq$t.id}|Select-Object -First 1;if($i){foreach($pair in @(@('status','Queued'),@('error',''),@('question',''),@('agent','auto'),@('updatedAt',[DateTime]::Now.ToString('o')))){if($i.PSObject.Properties.Name -contains $pair[0]){$i.($pair[0])=$pair[1]}else{$i|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1]}};WriteQ $a;RefreshQ}})
 $LogBtn.Add_Click({$p=Join-Path $Root 'logs\\project-manager-worker.log';if(Test-Path $p){Start-Process notepad.exe $p}else{[Windows.MessageBox]::Show("Worker-log findes endnu ikke:`n$p")|Out-Null}})
 $RefreshBtn.Add_Click({RefreshQ})
 $AddAttachmentBtn.Add_Click({$d=New-Object Microsoft.Win32.OpenFileDialog;$d.Multiselect=$true;$d.Filter='Alle filer|*.*';if($d.ShowDialog()){$d.FileNames|%{[void]$Attachments.Items.Add($_)}}});$RemoveAttachmentBtn.Add_Click({@($Attachments.SelectedItems)|%{$Attachments.Items.Remove($_)}});$OpenResultBtn.Add_Click({$t=$Queue.SelectedItem;if($t.resultPath-and(Test-Path $t.resultPath)){Start-Process $t.resultPath}})
-$WorkerBtn.Add_Click({if($script:worker-and!$script:worker.HasExited){Stop-Process $script:worker.Id -Force;$script:worker=$null}else{$ws=Join-Path $Root 'tools\project-manager-worker.ps1';$exe=if(Get-Command pwsh.exe -ea SilentlyContinue){'pwsh.exe'}else{'powershell.exe'};$script:worker=Start-Process $exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$ws`"",'-Root',"`"$Root`"") -PassThru -WindowStyle Hidden};RefreshQ})
+$WorkerBtn.Add_Click({Invoke-StudioUiAction {Start-StudioUiWorker}})
+. (Join-Path $PSScriptRoot '../adapters/Studio.Gui.ps1')
 $timer=New-Object Windows.Threading.DispatcherTimer;$timer.Interval=[TimeSpan]::FromSeconds(3);$timer.Add_Tick({RefreshQ});$timer.Start();$w.Add_Closed({$timer.Stop()});RefreshQ;[void]$w.ShowDialog()

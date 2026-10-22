@@ -1,5 +1,12 @@
 # AI Game Studio 1864 v11.0
 
+## Unified project manager v18
+
+Project planning, specialist roles, Ollama, local Copilot, GitHub Copilot and the
+Blender/Unreal asset pipeline now share one queue and result contract.
+Start `tools/start-project-manager.ps1` or use `python tools/studio.py`.
+See [the integrated workflow and setup](docs/ORCHESTRATOR.md).
+
 ## Prop pipeline development
 
 The opt-in worker asset pipeline adds Blender prop cleanup/export, three previews,

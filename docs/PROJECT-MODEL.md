@@ -1,7 +1,8 @@
 # Project manager, agents and execution backends
 
-This describes the code/configuration observed on 2026-10-22, not a claim that every
-configured role or model is running.
+Updated for the unified v18 orchestrator on 2026-10-22. See
+[setup and operation](ORCHESTRATOR.md). Configured roles/models are not a claim
+that every provider is currently running.
 
 ## Intended model
 
@@ -20,16 +21,18 @@ Possible execution backends have different responsibilities:
 - Local Copilot CLI: local repository software work, when explicitly dispatched.
 - GitHub agent tasks: repository software work through GitHub and pull requests.
 
-## Current implementation: three partially overlapping tracks
+## Current implementation: one queue and dispatcher
 
-| Track | Entry points | Queue/backend | What it actually does |
+| Component | Entry points | Queue/backend | What it actually does |
 | --- | --- | --- | --- |
-| Prop GUI/worker | tools/project-manager-gui.ps1 and project-manager-worker.ps1 | tasks/queue.gui.json | Fixed Hunyuan → Blender → QA → Unreal path; asset stages are opt-in with write approvals |
-| Python planner | core/studio.py and core/runtime.py | tasks/queue.json and Ollama-compatible API | Creates a predefined task dependency plan, loads role prompts, routes local models and runs ready tasks |
-| Earlier project manager | gui/project-manager.ps1 and AIStudio.Queue.psm1 | data/queue.json and local Copilot command | Keyword-based role selection, local CLI invocation and review/retry status |
+| GUI/worker | tools/project-manager-gui.ps1 and project-manager-worker.ps1 | tasks/queue.gui.json | Routes roles/backends, dependencies, plan approval and existing asset stages |
+| CLI | tools/studio.py and compatibility core/studio.py | Same canonical queue | Adds tasks/plans, runs worker, approves results and explicitly imports old queues |
+| Earlier entry points | gui/project-manager.ps1 and AIStudio.Queue.psm1 | Same canonical queue | Compatibility facade; no second queue writer |
+| Provider adapter | adapters/project_bridge.py | Per-task receipts | Ollama, local Copilot, GitHub task dispatch/polling and isolated PR validation |
 
-The prop GUI and its worker now share the transaction/revision/merge implementation
-in adapters/Studio.Queue.psm1. That does not unify the other two queues.
+The GUI, worker and CLI share adapters/Studio.Queue.psm1 and
+adapters/Studio.Orchestrator.psm1. Historical queues are imported only on an explicit
+operator command; source runtime state is not automatically migrated.
 
 ## Local model configuration
 
@@ -42,26 +45,26 @@ Historical research, character 3D, rigging, animation, QA and environment roles 
 configured as light; technical research, gameplay, Unreal and integration are heavy.
 Configured names do not verify model availability or hardware placement.
 
-config/agents.json separately defines seven role records: research, Blender, rigging,
-animation, Unreal, QA and project manager. Other lists include additional role IDs.
-Those naming differences and routing contracts remain to be reconciled.
+config/orchestrator.json defines the supported canonical roles. Common older role
+IDs are normalized by the bridge; canonical instruction files are in agents/.
+Older config/agents.json and config/project-manager.json are not authoritative.
 
-The current project-manager prompt asks its specialist to record evidence and
-describe child tasks when another specialty is needed. It does not implement a full
-autonomous planner/dispatcher by itself. The prop worker's routing is ordinary code,
-not an LLM autonomously controlling all listed agents.
+The project manager proposes a bounded JSON dependency plan. Applying that plan
+requires operator review. Deterministic code validates the graph and schedules ready
+tasks; the LLM does not directly execute arbitrary commands or mark jobs complete.
 
 ## Copilot/GitHub bridge status
 
 A local copilot.exe executable and gh agent-task command were found on this machine.
-No Copilot task was started as part of this inspection. Existing code contains both
-a local Copilot invocation and a tools/start-github-copilot-task.ps1 dispatch helper.
-config/project-manager.json also contains a Copilot enabled=false flag; these older
-paths are not one consolidated, uniformly configured backend.
+No paid Copilot task was started during implementation validation. Both Copilot
+providers are connected through the same task/result contract. Direct standalone
+dispatch helpers remain manual tools outside the authoritative queue.
 
-A complete bridge still needs one authoritative task contract, dispatch/session/PR
-IDs, remote progress collection, controlled checkout of returned code, local tests,
-tool validation and result reconciliation. The bridge should exchange code and job
-manifests through Git/PRs. The local runner executes machine-specific Blender/Unreal
-jobs and returns evidence; a GitHub task is not treated as proof of local GPU/engine
-execution. This bridge was not implemented or exercised in the prop smoke test.
+Receipts record dispatch/session/PR IDs, progress, isolated checkout, exact validated
+head and test evidence. Interrupted/ambiguous dispatches do not automatically start a
+second session. Code approval checks the current PR head and requires manual merge
+before dependencies are released. Revalidation does not dispatch another agent.
+The local runner executes Blender/Unreal jobs; remote code results do not establish
+local GPU/engine execution. Provider behavior is covered with fake CLIs, real local
+Git/tests, and an isolated worker/HTTP integration test. Real Blender/Unreal evidence
+comes from the separate synthetic-prop smoke test.

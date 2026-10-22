@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "jobs_root": "data/pipeline-jobs",
+  "repository": "phenixdk2020/ai-game-studio",
+  "base_branch": "main",
+  "github_executable": "gh",
+  "copilot_executable": "copilot",
+  "git_executable": "git",
+  "command_timeout": 1800,
+  "poll_seconds": 30,
+  "validation_commands": [["python", "-m", "unittest", "discover", "-s", "tests", "-v"]],
+  "roles": ["project_manager", "historical_research", "technical_research", "character3d", "rigging", "animation", "gameplay", "unreal", "qa", "integration", "environment", "art_world"]
+}
