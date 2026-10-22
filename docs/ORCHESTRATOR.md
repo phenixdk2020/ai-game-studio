@@ -104,5 +104,7 @@ PR-SHA, beskyttede runtime-stier, testfejl, lokal Copilot-kommando, planer,
 afhængigheder, migration, CLI og WPF-kontroller. En isoleret integrationstest
 kører den rigtige worker, køtransaktioner og adapter mod en lokal HTTP-testserver
 og godkender resultatet. Copilot-udbyderne simuleres; testen starter ingen betalte
-Copilot-opgaver. Den tidligere virkelige Blender/Unreal-validering er beskrevet i
+Copilot-opgaver. En efterfølgende [virkelig Copilot-test](COPILOT-LIVE-2026-10-22.md)
+bekræftede lokal Copilot → lokale tests → draft-PR; GitHub cloud-dispatch blev
+afvist med 403 og er endnu ikke valideret hele vejen. Den tidligere virkelige Blender/Unreal-validering er beskrevet i
 [integrationsrapporten](INTEGRATION-2026-10-22.md).

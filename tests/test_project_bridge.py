@@ -110,12 +110,24 @@ class BridgeTests(unittest.TestCase):
         self.task['description']='Different task'
         with self.assertRaisesRegex(ValueError,'inputs changed'): self.bridge().advance(True)
 
+    def test_github_forbidden_is_actionable_and_not_redispatched(self):
+        bridge=self.bridge()
+        def forbidden(args,**kwargs):
+            self.calls.append(args)
+            return SimpleNamespace(stdout='',stderr='failed to create job: 403 Forbidden',returncode=1)
+        bridge.runner=forbidden
+        result=bridge.advance(True)
+        self.assertEqual(result['status'],'NeedsInput');self.assertIn('cloud-agent access',result['error'])
+        bridge.advance(True);self.assertEqual(len(self.calls),1)
+
     def test_local_copilot_uses_isolated_checkout_and_publishes_draft(self):
         self.task['backend']='copilot-local'
         result=self.bridge().advance(True)
         self.assertEqual(result['status'],'AwaitingCodeReview')
         copilot=next(call for call in self.calls if call[0]=='copilot')
         self.assertIn('--no-remote',copilot);self.assertIn('--deny-tool=shell(git push)',copilot)
+        self.assertIn('--trust-folder',copilot);self.assertIn('--name',copilot)
+        self.assertNotIn('--session-id',copilot)
         self.assertIn('--draft',next(call for call in self.calls if call[1:3]==['pr','create']))
         self.assertTrue(any('HEAD:refs/heads/studio/task-test-' in ' '.join(call) for call in self.calls))
 

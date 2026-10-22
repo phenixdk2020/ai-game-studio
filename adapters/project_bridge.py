@@ -221,12 +221,23 @@ class Bridge:
         receipt.update(branch=branch, stage="copilot-local", status="Running")
         self.save(receipt)  # A crash after this point must not start another coding session.
         session = str(uuid.uuid4())
-        receipt["sessionId"] = session
+        receipt["sessionName"] = session
         self.save(receipt)
-        self.command([self.tool("copilot"), "-C", str(checkout), "--trust-folder", "--session-id", session,
+        execution = self.command([self.tool("copilot"), "-C", str(checkout), "--trust-folder", "--name", session,
             "--no-auto-update", "--disable-builtin-mcps", "--no-remote", "--no-ask-user", "--allow-all-tools",
             "--deny-tool=shell(git push)", "--deny-tool=shell(gh pr create)", "--output-format=json",
             "--log-dir", str(self.path / "copilot-logs"), "-p", self.prompt()], "copilot", checkout)
+        for line in execution.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(event, dict):
+                data = event.get('data', {})
+                identity = event.get('sessionId') or (data.get('sessionId') if isinstance(data, dict) else None)
+                if isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,199}', identity):
+                    receipt['sessionId'] = identity
+        self.save(receipt)
         changed = self.command([git, "status", "--porcelain", "--untracked-files=all"], "local-status", checkout).stdout
         committed = self.command([git, 'diff', '--name-only', 'origin/' + self.config['base_branch'], 'HEAD'], 'local-committed', checkout).stdout
         if not changed.strip() and not committed.strip():
@@ -263,7 +274,11 @@ class Bridge:
         receipt.update(status="Dispatching", stage="github-dispatch")
         self.save(receipt)  # Prevent duplicate submissions after an interrupted/ambiguous request.
         result = self.command([self.tool("github"), "agent-task", "create", "--repo", self.config["repository"],
-            "--base", self.config["base_branch"], "--from-file", str(prompt_path)], "github-dispatch")
+            "--base", self.config["base_branch"], "--from-file", str(prompt_path)], "github-dispatch", check=False)
+        if result.returncode:
+            if '403' in (result.stderr or ''):
+                raise PermissionError('GitHub cloud agent refused dispatch (403 Forbidden). Check Copilot cloud-agent access, repository policy and CLI authentication; ordinary Git repository access is insufficient evidence. No automatic retry was made.')
+            raise RuntimeError(f'github-dispatch failed ({result.returncode}); see bridge/github-dispatch.stderr.txt')
         receipt.update(prUrl=self.parse_url(result.stdout), status="WaitingForRemote", stage="github-session")
         receipt["nextPollAt"] = now().isoformat()
 
