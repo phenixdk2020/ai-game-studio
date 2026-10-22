@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "pterm": "",
+  "command_timeout": 30,
+  "startup_timeout": 180,
+  "request_timeout": 900,
+  "tools": {
+    "image_to_3d": {
+      "query": "Hunyuan3D",
+      "preferred_app": "Hunyuan3d-2-lowvram.git",
+      "supported_apps": ["Hunyuan3d-2-lowvram.git"],
+      "selectors": ["start.js?profile=4"],
+      "startup_timeout": 900,
+      "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
+      "operations": {
+        "generate_shape": {
+          "api_name": "shape_generation",
+          "file_inputs": ["image"],
+          "attachment_parameter": "image",
+          "artifact_extensions": [".glb"],
+          "defaults": {"steps": 5, "seed": 1234, "randomize_seed": false, "octree_resolution": 256, "check_box_rembg": true}
+        },
+        "decode_settings": {
+          "api_name": "on_decode_mode_change",
+          "defaults": {"value": "Standard"}
+        }
+      }
+    },
+    "image_generation": {
+      "query": "image generation",
+      "preferred_app": "comfy.git",
+      "supported_apps": ["comfy.git"],
+      "selectors": ["start.js"],
+      "startup_timeout": 600,
+      "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
+      "operations": {
+        "generate_image": {
+          "protocol": "comfyui",
+          "artifact_extensions": [".png"],
+          "defaults": {"width":512,"height":512,"steps":20,"seed":1234,"cfg":7.0,"negative_prompt":"blurry, low quality"}
+        }
+      }
+    },
+    "animation": {
+      "query": "mesh2motion",
+      "roles": ["project_manager", "rigging", "animation", "integration", "qa"],
+      "operations": {}
+    }
+  }
+}
