@@ -2,6 +2,7 @@
 $Backend=New-Object Windows.Controls.ComboBox
 @('auto','ollama','copilot-local','copilot-github','asset3d','pinokio')|ForEach-Object{[void]$Backend.Items.Add($_)}
 $Backend.SelectedIndex=0
+$Backend.ToolTip='Auto bruger lokal Copilot til kode, Ollama til planer/research og Pinokio ved valg af et værktøj.'
 $Dependencies=New-Object Windows.Controls.TextBox
 $form=$Agent.Parent
 $position=$form.Children.IndexOf($Agent)

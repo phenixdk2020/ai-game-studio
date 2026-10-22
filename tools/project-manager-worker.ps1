@@ -224,7 +224,7 @@ try {
 
         try {
             Set-TaskProperty $task 'workerVersion' '18.0'
-            $backend = Get-StudioBackend -Task $task
+            $backend = Get-StudioBackend -Task $task -Root $Root
             if ($backend -ne 'asset3d') {
                 Invoke-SpecialistTask -Task $task -Queue $queue -Backend $backend
                 if ($Once) { break }

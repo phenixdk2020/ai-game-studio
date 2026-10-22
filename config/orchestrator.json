@@ -3,6 +3,7 @@
   "jobs_root": "data/pipeline-jobs",
   "repository": "phenixdk2020/ai-game-studio",
   "base_branch": "main",
+  "default_code_backend": "copilot-local",
   "github_executable": "gh",
   "copilot_executable": "copilot",
   "git_executable": "git",

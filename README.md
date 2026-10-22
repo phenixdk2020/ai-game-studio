@@ -4,6 +4,7 @@
 
 Project planning, specialist roles, Ollama, local Copilot, GitHub Copilot and the
 Blender/Unreal asset pipeline now share one queue and result contract.
+Automatic coding tasks and newly generated plans use local Copilot by default.
 Start `tools/start-project-manager.ps1` or use `python tools/studio.py`.
 See [the integrated workflow and setup](docs/ORCHESTRATOR.md).
 Agents can also use [Pinokio app tools](docs/PINOKIO-TOOLS.md), including a live-tested

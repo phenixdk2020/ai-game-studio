@@ -140,6 +140,7 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(result['status'],'AwaitingPlanReview')
         saved=json.loads(Path(result['resultPath']).read_text())
         self.assertEqual(saved['tasks'][1]['dependencies'],[saved['tasks'][0]['id']])
+        self.assertEqual(saved['tasks'][1]['backend'],'copilot-local')
         self.assertEqual(self.calls,[])
         plan['tasks'][0]['dependencies']=['code']
         with self.assertRaisesRegex(ValueError,'Cyclic'): normalize_plan(plan,'TASK-TEST',bridge.source,self.config['roles'])
@@ -150,6 +151,16 @@ class BridgeTests(unittest.TestCase):
             with self.subTest(key=key,value=value),self.assertRaises(ValueError):validate(task,self.config)
         for plan in [{'tasks':[]},{'tasks':[{'key':'a'},{'key':'a'}]}]:
             with self.assertRaises(ValueError):normalize_plan(plan,'TASK-TEST',{},self.config['roles'])
+
+    def test_invalid_code_backend_config_is_rejected(self):
+        for value in ('shell','ollama',None):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'default_code_backend'):
+                validate(self.task,{**self.config,'default_code_backend':value})
+
+    def test_planner_can_use_explicitly_configured_code_backend(self):
+        step=dict(key='code',title='Code',description='Build',role='gameplay',backend='copilot-local')
+        result=normalize_plan({'tasks':[step]},'PARENT',{'attachments':[],'projectPath':''},self.config['roles'],'copilot-github')
+        self.assertEqual(result['tasks'][0]['backend'],'copilot-github')
 
     def test_pinokio_task_uses_role_tools_and_requires_result_review(self):
         self.task.update(backend='pinokio',role='character3d',toolCapability='image_to_3d',toolOperation='decode_settings',toolParameters={})

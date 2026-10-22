@@ -21,6 +21,11 @@ from asset_pipeline import ROOT, contained, read_json, task_lock, write_json
 BACKENDS = {"ollama", "copilot-local", "copilot-github", "pinokio"}
 PROTECTED = {"tasks", "results", "logs", "state"}
 
+def code_backend(config):
+    value=config.get('default_code_backend','copilot-local')
+    if value not in {'copilot-local','copilot-github'}:raise ValueError('Invalid default_code_backend')
+    return value
+
 
 def now():
     return datetime.now(timezone.utc)
@@ -35,6 +40,7 @@ def role_name(name):
 
 
 def validate(task, config):
+    code_backend(config)
     if not isinstance(task, dict) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}", str(task.get("id", ""))):
         raise ValueError("Invalid task id")
     if not isinstance(task.get("id"), str) or re.fullmatch(r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]", task["id"], re.I):
@@ -83,7 +89,8 @@ def pr_number(url, repository):
     return int(match.group(1))
 
 
-def normalize_plan(value, parent, source, roles):
+def normalize_plan(value, parent, source, roles, default_code_backend='copilot-local'):
+    if default_code_backend not in {'copilot-local','copilot-github'}:raise ValueError('Invalid default_code_backend')
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("```json") and text.endswith("```"):
@@ -109,7 +116,7 @@ def normalize_plan(value, parent, source, roles):
         graph[step["key"]] = deps
         rows.append({"schemaVersion": 1, "id": mapping[step["key"]], "parentId": parent,
             "title": step["title"], "description": step["description"], "role": step["role"],
-            "agent": step["role"], "backend": step["backend"], "kind": "task", "status": "Queued",
+            "agent": step["role"], "backend": default_code_backend if step['backend'] in {'copilot-local','copilot-github'} else step['backend'], "kind": "task", "status": "Queued",
             "dependencies": [mapping[key] for key in deps], "attachments": source["attachments"],
             "projectPath": source["projectPath"], "createdAt": now().isoformat(), "priority": 10})
         if step['backend']=='pinokio':
@@ -196,7 +203,7 @@ class Bridge:
         if planning:
             instructions += ('\nReturn only JSON {"tasks":[{"key":"step1","title":"...","description":"...",'
                 '"role":"project_manager","backend":"ollama","dependencies":[]}]}. '
-                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/copilot-local/copilot-github/pinokio. For pinokio tasks include toolCapability, toolOperation and toolParameters. '
+                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/pinokio or the configured code backend '+code_backend(self.config)+'. All coding tasks must use '+code_backend(self.config)+'. For pinokio tasks include toolCapability, toolOperation and toolParameters. '
                 'Do not claim execution. Allowed roles: ' + ", ".join(self.config["roles"]))
         answer = self.http({"model": model, "temperature": 0.2, "messages": [
             {"role": "system", "content": instructions}, {"role": "user", "content": self.source["description"]}]})
@@ -204,7 +211,7 @@ class Bridge:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Empty model result")
         if planning:
-            plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"])
+            plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"], code_backend(self.config))
             target = self.path / "plan.json"
             write_json(target, plan)
         else:

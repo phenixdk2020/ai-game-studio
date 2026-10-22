@@ -34,6 +34,17 @@ læg nødvendige cloud-referencer i repositoryet.
 
 ## Start fra Windows
 
+Kodeopgaver med backend `auto` bruger nu lokal Copilot. Indstillingen
+`default_code_backend` i `config/orchestrator.json` er `copilot-local`.
+Projektlederens nye planer følger samme indstilling, også hvis modellen foreslår
+cloud-Copilot i sit rå plansvar. Et eksplicit backendvalg på en eksisterende opgave
+bevares; produktionskøer omskrives ikke. Cloud-adgang er derfor ikke en
+forudsætning for det almindelige kodeforløb.
+
+Gameplay- og integrationsroller vælger kodebackend før tekstbaseret 3D-genkendelse,
+så eksempelvis en rettelse af en property ikke bliver behandlet som en 3D-prop.
+Pinokio-værktøjsvalg og eksplicit valgte backends har fortsat højeste prioritet.
+
 ```powershell
 & C:\ai-game-studio\tools\start-project-manager.ps1
 ```

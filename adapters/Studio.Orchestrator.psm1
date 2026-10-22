@@ -22,14 +22,22 @@ function New-StudioTask {
 }
 
 function Get-StudioBackend {
-    param($Task)
+    param($Task, [string]$Root=(Split-Path $PSScriptRoot -Parent))
     if ($Task.backend -and $Task.backend -ne 'auto') { return [string]$Task.backend }
     if ($Task.toolCapability) { return 'pinokio' }
     if ($Task.kind -eq 'plan') { return 'ollama' }
+    $codeBackend='copilot-local'
+    $configPath=Join-Path $Root 'config/orchestrator.json'
+    if(Test-Path -LiteralPath $configPath){
+        $settings=Get-Content -LiteralPath $configPath -Raw -Encoding UTF8|ConvertFrom-Json
+        if($settings.PSObject.Properties.Name -contains 'default_code_backend'){$codeBackend=[string]$settings.default_code_backend}
+    }
+    if($codeBackend -notin @('copilot-local','copilot-github')){throw 'Invalid default_code_backend.'}
+    if($Task.role -in @('gameplay','integration','gameplay-ai-agent','integration-agent','hud-ui-agent')){return $codeBackend}
     $text = "$($Task.title) $($Task.description)"
     if ($text -match '(?i)3d|mesh|sword|character|prop|sv.rd|model af|blender') { return 'asset3d' }
     if ($text -match '(?i)research|historisk|kilder|specifikation|planl.g') { return 'ollama' }
-    'copilot-github'
+    $codeBackend
 }
 
 function Get-StudioReadyTask {

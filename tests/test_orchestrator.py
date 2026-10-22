@@ -13,6 +13,16 @@ HOST=shutil.which('pwsh') or shutil.which('powershell.exe')
 
 @unittest.skipUnless(HOST,'PowerShell required')
 class OrchestratorTests(unittest.TestCase):
+    def test_automatic_code_routing_uses_local_copilot(self):
+        output=self.ps("$code=[pscustomobject]@{title='Implement a menu';description='Add navigation';backend='auto'};$property=[pscustomobject]@{title='Fix property UI';description='Repair bindings';backend='auto';role='gameplay'};$tool=[pscustomobject]@{backend='auto';toolCapability='image_generation'};$explicit=[pscustomobject]@{backend='copilot-github'};@((Get-StudioBackend $code),(Get-StudioBackend $property),(Get-StudioBackend $tool),(Get-StudioBackend $explicit))|ConvertTo-Json -Compress")
+        self.assertEqual(json.loads(output),['copilot-local','copilot-local','pinokio','copilot-github'])
+
+    def test_code_routing_reads_selected_root_config(self):
+        with TemporaryDirectory() as folder:
+            directory=Path(folder)/'config';directory.mkdir()
+            (directory/'orchestrator.json').write_text(json.dumps({'default_code_backend':'copilot-github'}))
+            self.assertEqual(self.ps(f"Get-StudioBackend -Root '{folder}' -Task ([pscustomobject]@{{backend='auto';title='Menu';description='Implement'}})"),'copilot-github')
+
     def ps(self,script):
         command="$ErrorActionPreference='Stop';Import-Module '"+str(ROOT/'adapters/Studio.Queue.psm1')+"' -Force;Import-Module '"+str(ROOT/'adapters/Studio.Orchestrator.psm1')+"' -Force;"+script
         result=subprocess.run([HOST,'-NoProfile','-Command',command],capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=30)
