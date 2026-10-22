@@ -86,9 +86,12 @@ class Pinokio:
         tool=self.config['tools'][capability]
         query=tool['query'];minimum='2' if len(query.split())>=3 else '1'
         response=self.command(['search',query,'--mode','balanced','--min-match',minimum,'--limit','8'])
-        apps=response.get('apps',[])
+        def compatible(items):
+            allowed=tool.get('supported_apps')
+            return [app for app in items if not allowed or app.get('app_id') in allowed]
+        apps=compatible(response.get('apps',[]))
         if not apps:
-            response=self.command(['search',query,'--mode','broad','--limit','8']);apps=response.get('apps',[])
+            response=self.command(['search',query,'--mode','broad','--limit','8']);apps=compatible(response.get('apps',[]))
         if not apps:raise ToolUnavailable('No installed app found for '+capability+'; no installation was attempted')
         return rank_apps(apps,tool.get('preferred_app'))
 
@@ -145,7 +148,11 @@ class Pinokio:
                     if not isinstance(info.get('named_endpoints'),dict):continue
                     return {'base_url':base,'api_prefix':prefix,'info':info}
                 except (OSError,ValueError) as error:failures.append(str(error))
-        raise ToolUnavailable('No documented Gradio API could be reached: '+'; '.join(failures)[-1000:])
+            try:
+                from comfy_tools import inspect_comfy
+                return inspect_comfy(base)
+            except (OSError,ValueError,ToolUnavailable) as error:failures.append(str(error))
+        raise ToolUnavailable('No supported documented app API could be reached: '+'; '.join(failures)[-1000:])
 
     def invoke(self,capability,operation,parameters,state,evidence):
         from asset_pipeline import task_lock
@@ -156,6 +163,9 @@ class Pinokio:
     def _invoke(self,capability,operation,parameters,state,evidence):
         operation_config=self.config['tools'][capability].get('operations',{}).get(operation)
         if not operation_config:raise ToolUnavailable('Operation is not registered; inspect the app API first')
+        if operation_config.get('protocol')=='comfyui':
+            from comfy_tools import generate_image
+            return generate_image(self,capability,operation,parameters,state,Path(evidence),operation_config)
         api=self.inspect(state);name=operation_config['api_name']
         endpoint=api['info']['named_endpoints'].get('/'+name.lstrip('/'))
         if not endpoint:raise ToolUnavailable('Registered API operation no longer exists; refresh the app contract')
@@ -273,6 +283,9 @@ class Pinokio:
                 if target.suffix=='.glb':
                     from asset_pipeline import validate_glb
                     validate_glb(temporary)
+                elif target.suffix=='.png':
+                    from comfy_tools import validate_png
+                    validate_png(temporary)
                 temporary.replace(target)
             finally:temporary.unlink(missing_ok=True)
             artifacts.append({'path':str(target),'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'bytes':target.stat().st_size})

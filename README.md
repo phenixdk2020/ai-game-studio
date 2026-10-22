@@ -8,6 +8,8 @@ Start `tools/start-project-manager.ps1` or use `python tools/studio.py`.
 See [the integrated workflow and setup](docs/ORCHESTRATOR.md).
 Agents can also use [Pinokio app tools](docs/PINOKIO-TOOLS.md), including a live-tested
 Hunyuan image-to-GLB operation with upload, result download and artifact hashes.
+ComfyUI image tasks use a registered text-to-image workflow with installed-model
+selection, persistent prompt IDs, PNG validation and explicit result resumption.
 
 ## Prop pipeline development
 

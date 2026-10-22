@@ -177,6 +177,34 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(result['status'],'NeedsInput')
             tools.return_value.ensure.assert_not_called()
 
+    def test_pinokio_can_resume_recorded_tool_job_after_timeout(self):
+        self.task.update(backend='pinokio',role='art_world',toolCapability='image_generation',toolOperation='generate_image',toolParameters={'prompt':'Blue prop'})
+        from pinokio_tools import ToolUnavailable
+        bridge=self.bridge()
+        with patch('pinokio_tools.Pinokio') as tools:
+            def pending(*args):
+                (Path(args[-1])/'tool-call.json').write_text(json.dumps({'status':'Submitted','prompt_id':'recorded-id'}))
+                raise ToolUnavailable('Still pending')
+            tools.return_value.invoke.side_effect=pending
+            self.assertEqual(bridge.advance(True)['status'],'NeedsInput')
+            def ready(*args):(Path(args[-1])/'tool-result.json').write_text(json.dumps({'artifacts':[]}))
+            tools.return_value.invoke.side_effect=ready
+            self.assertEqual(bridge.advance(True,resume_tool=True)['status'],'AwaitingVisualReview')
+            self.assertEqual(tools.return_value.invoke.call_count,2)
+
+    def test_pinokio_ambiguous_dispatch_cannot_be_resumed_as_new_job(self):
+        self.task.update(backend='pinokio',role='art_world',toolCapability='image_generation',toolOperation='generate_image',toolParameters={'prompt':'Blue prop'})
+        from pinokio_tools import ToolUnavailable
+        bridge=self.bridge()
+        with patch('pinokio_tools.Pinokio') as tools:
+            def interrupted(*args):
+                (Path(args[-1])/'tool-call.json').write_text(json.dumps({'status':'Dispatching','prompt_id':'recorded-id'}))
+                raise ToolUnavailable('Connection lost')
+            tools.return_value.invoke.side_effect=interrupted
+            bridge.advance(True)
+            with self.assertRaisesRegex(ValueError,'ambiguous'):bridge.advance(True,resume_tool=True)
+            self.assertEqual(tools.return_value.invoke.call_count,1)
+
     def test_pinokio_generation_uses_attached_reference(self):
         image=Path(self.temp.name)/'reference.png';image.write_bytes(b'reference')
         self.task.update(backend='pinokio',role='character3d',attachments=[str(image)],toolCapability='image_to_3d',toolOperation='generate_shape',toolParameters={})

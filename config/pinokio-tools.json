@@ -8,6 +8,7 @@
     "image_to_3d": {
       "query": "Hunyuan3D",
       "preferred_app": "Hunyuan3d-2-lowvram.git",
+      "supported_apps": ["Hunyuan3d-2-lowvram.git"],
       "selectors": ["start.js?profile=4"],
       "startup_timeout": 900,
       "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
@@ -27,8 +28,18 @@
     },
     "image_generation": {
       "query": "image generation",
+      "preferred_app": "comfy.git",
+      "supported_apps": ["comfy.git"],
+      "selectors": ["start.js"],
+      "startup_timeout": 600,
       "roles": ["project_manager", "character3d", "environment", "art_world", "integration", "qa"],
-      "operations": {}
+      "operations": {
+        "generate_image": {
+          "protocol": "comfyui",
+          "artifact_extensions": [".png"],
+          "defaults": {"width":512,"height":512,"steps":20,"seed":1234,"cfg":7.0,"negative_prompt":"blurry, low quality"}
+        }
+      }
     },
     "animation": {
       "query": "mesh2motion",

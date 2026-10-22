@@ -97,6 +97,7 @@ function Invoke-SpecialistTask {
     Set-TaskProperty $Task 'dependencyResults' $dependencyResults
     New-Item -ItemType Directory -Force -Path $taskDirectory | Out-Null
     $taskFile = Join-Path $taskDirectory 'bridge-task.json'
+    Set-TaskProperty $Task 'toolProgressPath' (Join-Path $taskDirectory 'bridge/tool-progress.json')
     [IO.File]::WriteAllText($taskFile, ($Task | ConvertTo-Json -Depth 40), $utf8)
     if ($Task.status -eq 'Queued') {
         Set-TaskProperty $Task 'attempt' ([int]$Task.attempt + 1)
@@ -106,6 +107,7 @@ function Invoke-SpecialistTask {
     }
     $arguments = @((Join-Path $Root 'adapters\project_bridge.py'), $taskFile, '--config', $OrchestratorConfig, '--approve-dispatch')
     if ($Task.bridgeAction -eq 'revalidate') { $arguments += '--revalidate' }
+    if ($Task.bridgeAction -eq 'resume-tool') { $arguments += '--resume-tool' }
     $lines = @(& $Python @arguments)
     $response = ($lines -join "`n") | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw $response.error }

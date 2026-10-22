@@ -32,9 +32,10 @@ Possible execution backends have different responsibilities:
 | Pinokio tools | adapters/pinokio_tools.py | pterm and registered app APIs | Discover/launch apps, transfer inputs and return verified artifacts to role tasks |
 
 The [Pinokio tool integration](PINOKIO-TOOLS.md) now includes live-tested Hunyuan
-shape generation and a real worker/queue round trip. Image and animation app
-candidates can be discovered; their generation operations still need app-specific
-API registration and validation.
+shape generation and a real worker/queue round trip. ComfyUI image generation now
+has a fixed workflow, model selection, prompt receipts, history polling and PNG
+validation. Animation candidates can be discovered; their generation operations
+still need app-specific API registration and validation.
 
 The GUI, worker and CLI share adapters/Studio.Queue.psm1 and
 adapters/Studio.Orchestrator.psm1. Historical queues are imported only on an explicit

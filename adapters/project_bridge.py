@@ -407,7 +407,7 @@ class Bridge:
             raise ValueError('Merge the reviewed PR before completing this task and releasing dependent code tasks')
         return {'taskId': self.task['id'], 'status': 'Verified', 'validatedHead': receipt['validatedHead']}
 
-    def advance(self, approved=False, revalidate=False, bind_session=None, bind_pr=None):
+    def advance(self, approved=False, revalidate=False, bind_session=None, bind_pr=None, resume_tool=False):
         if not approved:
             return {"taskId": self.task["id"], "status": "WaitingForApproval", "backend": self.task["backend"],
                     "question": "Enable specialist/code backends before dispatching this task."}
@@ -417,6 +417,15 @@ class Bridge:
             receipt = read_json(self.receipt_path) if self.receipt_path.exists() else None
             if receipt and receipt.get("signature") != self.signature:
                 raise ValueError("Task inputs changed after dispatch; create a new task to preserve the original receipt")
+            if resume_tool:
+                if not receipt or self.task['backend']!='pinokio':raise ValueError('No existing Pinokio task to resume')
+                ticket=read_json(self.path/'tool-call.json')
+                if not ticket.get('event_id') and not (ticket.get('prompt_id') and ticket.get('status')=='Submitted'):
+                    raise ValueError('Dispatch was ambiguous; reconcile the existing job before resuming')
+                receipt.update(status='Running',error='',question='');self.save(receipt)
+                try:self.pinokio(receipt)
+                except Exception as error:receipt.update(status='NeedsInput',error=str(error))
+                self.save(receipt);return self.result(receipt)
             if revalidate or bind_session or bind_pr:
                 if not receipt or self.task['backend'] not in {'copilot-local','copilot-github'}:
                     raise ValueError('No existing coding receipt to reconcile')
@@ -479,12 +488,13 @@ def main():
     parser.add_argument('--bind-session')
     parser.add_argument('--bind-pr')
     parser.add_argument('--verify-review', action='store_true')
+    parser.add_argument('--resume-tool', action='store_true')
     parser.add_argument("--plan", action="store_true", help="Show backend/role without dispatch or filesystem writes")
     args = parser.parse_args()
     try:
         bridge = Bridge(read_json(args.task), read_json(args.config))
         result = {"taskId": bridge.task["id"], "backend": bridge.task["backend"], "role": bridge.role,
-                  "directory": str(bridge.directory)} if args.plan else (bridge.verify_review() if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr))
+                  "directory": str(bridge.directory)} if args.plan else (bridge.verify_review() if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
         print(json.dumps(result))
         return 0
     except Exception as error:

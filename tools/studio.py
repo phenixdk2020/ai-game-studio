@@ -30,6 +30,7 @@ def main(argv=None):
         command.add_argument('--depends-on', action='append', default=[])
         command.add_argument('--project', default='')
     command = commands.add_parser('approve'); command.add_argument('id')
+    command = commands.add_parser('resume-tool'); command.add_argument('id')
     command = commands.add_parser('import-legacy'); command.add_argument('source'); command.add_argument('--apply', action='store_true')
     for action in ('run', 'run-all'):
         command = commands.add_parser(action)

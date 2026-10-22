@@ -15,13 +15,15 @@ gennem `adapters/project_bridge.py` og den fælles worker. Også det eksisterend
 | Kapabilitet | Roller | Udførelse |
 |---|---|---|
 | `image_to_3d` | Projektleder, character3d, environment, art_world, integration, QA | Hunyuan `generate_shape` er forbundet og afprøvet med en rigtig GLB |
-| `image_generation` | Projektleder, character3d, environment, art_world, integration, QA | Installerede kandidater kan findes; genereringshandlinger er endnu ikke registreret |
+| `image_generation` | Projektleder, character3d, environment, art_world, integration, QA | ComfyUI `generate_image`: fast tekst-til-billede-workflow, PNG og jobkvittering |
 | `animation` | Projektleder, rigging, animation, integration, QA | Mesh2Motion-kandidater kan findes; rigging/animation er endnu ikke tilsluttet som udførelse |
 
 Søgeresultater er kandidater, ikke bevis for at en app kan udføre en bestemt
 handling. En model kan ikke opfinde et endpoint: kun handlinger i den lokale
-konfiguration kan kaldes. `inspect` læser en apps dokumenterede Gradio-API. Apps
-med andre protokoller, eksempelvis ComfyUI-workflows, kræver en særskilt klient.
+konfiguration kan kaldes. `inspect` læser en apps dokumenterede Gradio- eller
+ComfyUI-API. Hver protokol har sin egen klient. Konfigurationens `supported_apps`
+afgrænser de apps, som en registreret handling kan bruge; en kørende 3D-app bliver
+derfor ikke valgt som billedgenerator alene på grund af et bredt søgematch.
 En manglende/ændret API-kontrakt giver en fejl frem for en intern CLI-fallback.
 
 ## Brug i projektlederen
@@ -51,6 +53,37 @@ python tools/pinokio.py inspect image_to_3d --approve-launch
 python tools/studio.py add "Lav en prop fra referencen" --backend pinokio --role character3d --tool image_to_3d --operation generate_shape --attachment C:\references\prop.png
 python tools/studio.py run --specialists
 ```
+
+## Billedgenerering med ComfyUI
+
+Vælg rollen `art_world` eller en anden tilladt billedrolle, backend `pinokio`,
+værktøjet `image_generation` og handlingen `generate_image`. Parametre kan være:
+
+```json
+{"prompt":"A blue wooden crate, isolated on a neutral background","checkpoint":"an-installed-model.safetensors","width":512,"height":512,"steps":20,"seed":1234}
+```
+
+Checkpoint-navnet skal findes i appens `/object_info/CheckpointLoaderSimple`.
+`inspect`-opgaven viser de installerede muligheder. Ved mere end én model kræves
+et eksplicit valg. Klienten downloader ingen model og accepterer ikke vilkårlige
+workflows fra modellen. Det faste workflow understøtter almindelige Stable
+Diffusion/SDXL-checkpoints; Flux- og videomodeller kræver særskilte workflows.
+
+ComfyUI-jobbet gemmes med prompt-ID og workflow, hvorefter `/history/<ID>` følges
+og resultatet hentes fra `/view`. PNG-struktur og chunk-checksummer kontrolleres.
+En timeout starter ikke en ny generering. Brug **Hent værktøjsresultat igen** eller:
+
+```powershell
+python tools/studio.py resume-tool TASK-ID
+python tools/studio.py run --specialists
+```
+
+Genoptagelse kræver en kvittering for et faktisk indsendt job. En tvetydig dispatch
+skal afklares i appen først. Ændrede input kræver en ny opgave. Hunyuan og ComfyUI
+bruger samme review-kontrakt, selv om deres API-protokoller er forskellige.
+Under ventetiden skriver klienten `tool-progress.json` med job-ID og forløbet tid.
+GUI'ens feedbackfelt læser denne status for en kørende opgave; der vises ingen
+opdigtet procent for indlæsning eller generering.
 
 Pinokios kontrolplan skal være tilgængeligt. `pterm` findes fra Pinokios
 konfigurerede home eller PATH; Windows-scriptet kaldes gennem PowerShell, så

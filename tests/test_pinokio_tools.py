@@ -139,6 +139,12 @@ class PinokioTests(unittest.TestCase):
         rows=[{'app_id':'preferred','ready':False,'score':1000},{'app_id':'online','ready':True,'score':1}]
         self.assertEqual(rank_apps(rows,'preferred')[0]['app_id'],'online')
 
+    def test_capability_routing_excludes_incompatible_ready_app(self):
+        def runner(*args,**kwargs):
+            return SimpleNamespace(returncode=0,stderr='',stdout=json.dumps({'apps':[{'app_id':'Hunyuan3d-2-lowvram.git','ready':True},{'app_id':'comfy.git','ready':False}]}))
+        self.tools.runner=runner
+        self.assertEqual([app['app_id'] for app in self.tools.discover('image_generation')],['comfy.git'])
+
     def test_search_top_level_preferences_break_same_runtime_ties(self):
         rows=[{'app_id':'a','launch_count_total':1,'score':100},{'app_id':'b','launch_count_total':2,'score':1}]
         self.assertEqual(rank_apps(rows)[0]['app_id'],'b')

@@ -12,6 +12,13 @@ switch ($request.action) {
         New-StudioTask -Root $Root -Title $request.title -Description $request.description -Backend $request.backend -Role $request.role -Attachments @($request.attachments) -ProjectPath $request.projectPath -Dependencies @($request.dependencies) -Kind $request.kind -ToolCapability $request.toolCapability -ToolOperation $request.toolOperation -ToolParameters $request.toolParameters -ToolAppId $request.toolAppId | ConvertTo-Json -Depth 40
     }
     'approve' { Approve-StudioResult -Root $Root -Id $request.id }
+    'resume-tool' {
+        $path=Join-Path $Root 'tasks/queue.gui.json';$snapshot=Get-StudioQueueSnapshot -Path $path
+        $task=@($snapshot.Tasks|Where-Object id -eq $request.id)[0]
+        if(!$task -or $task.backend -ne 'pinokio' -or $task.status -notin @('NeedsInput','Failed','AwaitingVisualReview')){throw 'Select a stopped Pinokio task with an existing job receipt.'}
+        $task.status='Queued';$task|Add-Member -NotePropertyName bridgeAction -NotePropertyValue resume-tool -Force
+        Write-StudioQueue -Path $path -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision
+    }
     'import-legacy' { Import-StudioLegacyQueue -Root $Root -Source $request.source -Apply:([bool]$request.apply) | ConvertTo-Json -Depth 40 }
     'recover' {
         $path=Join-Path $Root 'tasks/queue.gui.json';$snapshot=Get-StudioQueueSnapshot -Path $path

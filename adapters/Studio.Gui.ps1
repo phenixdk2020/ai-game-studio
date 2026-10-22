@@ -18,7 +18,7 @@ foreach($entry in @(@('ToolCapability','PINOKIO VÆRKTØJ (fx image_to_3d)'),@('
 $ToolParameters.Text='{}'
 $toolCatalogButton=New-Object Windows.Controls.Button;$toolCatalogButton.Content='Vis Pinokio-værktøjer'
 $form.Children.Insert($toolPosition,$toolCatalogButton)
-$toolCatalogButton.Add_Click({Invoke-StudioUiAction {$output=@(& python (Join-Path $Root 'tools/pinokio.py') catalog);$Feedback.Text=$output -join "`n"}})
+$toolCatalogButton.Add_Click({Invoke-StudioUiAction {$output=@(& python (Join-Path $Root 'tools/pinokio.py') catalog);$catalog=($output -join "`n")|ConvertFrom-Json;if($LASTEXITCODE -ne 0){throw $catalog.error};$lines=@(foreach($tool in $catalog.tools){'Værktøj: '+$tool.capability;'Handlinger: '+($tool.operations -join ', ');'Roller: '+($tool.roles -join ', ');foreach($app in $tool.apps){'App: '+$app.title+' ['+$app.app_id+']  Klar: '+$app.ready};''});$Feedback.Text=$lines -join "`r`n"}})
 $toolbar=$NewBtn.Parent
 $toolbar.Orientation='Vertical'
 $buttons=New-Object Windows.Controls.WrapPanel
@@ -47,5 +47,7 @@ $prButton=New-Object Windows.Controls.Button;$prButton.Content='Åbn PR';[void]$
 $prButton.Add_Click({Invoke-StudioUiAction {$url=[string]$Queue.SelectedItem.prUrl;if($url -notmatch '^https://github\.com/[\w.-]+/[\w.-]+/pull/[1-9][0-9]*$'){throw 'Opgaven har ingen gyldig PR.'};Start-Process $url}})
 $revalidateButton=New-Object Windows.Controls.Button;$revalidateButton.Content='Validér PR igen';[void]$buttons.Children.Add($revalidateButton)
 $revalidateButton.Add_Click({Invoke-StudioUiAction {if(!$Queue.SelectedItem){throw 'Vælg en opgave.'};$snapshot=Get-StudioQueueSnapshot -Path $q;$task=@($snapshot.Tasks|Where-Object id -eq $Queue.SelectedItem.id)[0];if(!$task.prUrl){throw 'Opgaven har ingen PR.'};$task.status='Queued';$task|Add-Member -NotePropertyName bridgeAction -NotePropertyValue revalidate -Force;Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision;RefreshQ}})
+$resumeToolButton=New-Object Windows.Controls.Button;$resumeToolButton.Content='Hent værktøjsresultat igen';[void]$buttons.Children.Add($resumeToolButton)
+$resumeToolButton.Add_Click({Invoke-StudioUiAction {if(!$Queue.SelectedItem){throw 'Vælg en opgave.'};$snapshot=Get-StudioQueueSnapshot -Path $q;$task=@($snapshot.Tasks|Where-Object id -eq $Queue.SelectedItem.id)[0];if($task.backend -ne 'pinokio' -or $task.status -notin @('NeedsInput','Failed','AwaitingVisualReview')){throw 'Vælg en stoppet Pinokio-opgave.'};$task.status='Queued';$task|Add-Member -NotePropertyName bridgeAction -NotePropertyValue resume-tool -Force;Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision;RefreshQ}})
 $Queue.Add_SelectionChanged({if($Queue.SelectedItem){$Backend.SelectedItem=[string]$Queue.SelectedItem.backend;$Dependencies.Text=@($Queue.SelectedItem.dependencies)-join ', ';$ToolCapability.Text=[string]$Queue.SelectedItem.toolCapability;$ToolOperation.Text=[string]$Queue.SelectedItem.toolOperation;$ToolAppId.Text=[string]$Queue.SelectedItem.toolAppId;$ToolParameters.Text=if($Queue.SelectedItem.toolParameters){ConvertTo-Json -InputObject $Queue.SelectedItem.toolParameters -Depth 30}else{'{}'}}})
 $NewBtn.Add_Click({$Backend.SelectedIndex=0;$Dependencies.Text='';$ToolCapability.Text='';$ToolOperation.Text='';$ToolAppId.Text='';$ToolParameters.Text='{}'})
