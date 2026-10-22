@@ -54,12 +54,14 @@ function Set-TaskProperty {
 }
 
 function Read-Queue {
-    Read-StudioQueue -Path $queuePath
+    $snapshot = Get-StudioQueueSnapshot -Path $queuePath
+    $script:queueRevision = $snapshot.Revision
+    $snapshot.Tasks
 }
 
 function Write-Queue {
     param([array]$Items)
-    Write-StudioQueue -Path $queuePath -Items $Items
+    $script:queueRevision = Write-StudioQueue -Path $queuePath -Items $Items -ExpectedRevision $script:queueRevision -PassThruRevision
 }
 
 function Invoke-AssetStages {
@@ -86,6 +88,8 @@ function Invoke-AssetStages {
     Set-TaskProperty $Task 'status' 'Running'
     Set-TaskProperty $Task 'pipelineStage' 'blender-cleanup'
     Set-TaskProperty $Task 'workerVersion' '17.0'
+    $manifestPath = Join-Path $taskDirectory 'asset-manifest.json'
+    Set-TaskProperty $Task 'assetManifest' $manifestPath
     Write-Queue -Items $Queue
     $arguments = @((Join-Path $Root 'adapters\asset_pipeline.py'), $jobPath,
         '--config', $AssetConfig, '--approve-blender', '--resume')
@@ -95,7 +99,14 @@ function Invoke-AssetStages {
         if ($CaptureUnrealPreview) { $arguments += '--capture' }
     }
     $resultLines = @(& $Python @arguments)
-    if ($LASTEXITCODE -ne 0) { throw 'Asset pipeline failed. See asset-manifest.json and per-attempt logs.' }
+    if ($LASTEXITCODE -ne 0) {
+        $detail = ''
+        try {
+            $failure = ($resultLines -join "`n") | ConvertFrom-Json
+            if ($failure.status -eq 'Failed' -and $failure.error) { $detail = ': ' + $failure.error }
+        } catch { $detail = ' (no structured failure response was returned)' }
+        throw ('Asset pipeline failed' + $detail + '. See asset-manifest.json and per-attempt logs.')
+    }
     $result = ($resultLines -join "`n") | ConvertFrom-Json
     Set-TaskProperty $Task 'status' $result.status
     Set-TaskProperty $Task 'pipelineStage' $result.stage

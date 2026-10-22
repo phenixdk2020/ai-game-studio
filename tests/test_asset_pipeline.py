@@ -88,7 +88,9 @@ class AssetPipelineTests(unittest.TestCase):
         again = self.run_blender(resume=True)
         self.assertEqual(first["outputDirectory"], again["outputDirectory"])
         self.assertEqual(len(self.calls), 1)
-        self.assertFalse((self.task_root / ".asset-pipeline.lock").exists())
+        self.assertTrue((self.task_root / ".asset-pipeline.lock").is_file())
+        with pipeline.task_lock(self.task_root):
+            pass
 
     def test_retry_does_not_overwrite_previous_output(self):
         first = self.run_blender()
@@ -115,6 +117,36 @@ class AssetPipelineTests(unittest.TestCase):
                 self.run_blender()
         self.assertFalse(self.calls)
 
+    def test_lock_is_released_after_process_is_killed(self):
+        source = (
+            "import sys,time; from pathlib import Path; "
+            "sys.path.insert(0,sys.argv[1]); import asset_pipeline as p; "
+            "lock=p.task_lock(Path(sys.argv[2])); lock.__enter__(); "
+            "print('LOCKED',flush=True); time.sleep(30)"
+        )
+        child = subprocess.Popen([sys.executable, "-c", source, str(ROOT / "adapters"), str(self.task_root)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "LOCKED")
+            with self.assertRaisesRegex(RuntimeError, "locked"):
+                with pipeline.task_lock(self.task_root):
+                    pass
+        finally:
+            child.kill()
+            child.communicate(timeout=10)
+        with pipeline.task_lock(self.task_root):
+            pass
+        self.assertTrue((self.task_root / ".asset-pipeline.lock").is_file())
+
+    def test_legacy_lock_is_not_silently_adopted(self):
+        path = self.task_root / ".asset-pipeline.lock"
+        original = '{"pid":123,"createdAt":"legacy"}'
+        path.write_text(original, encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "Legacy task lock"):
+            with pipeline.task_lock(self.task_root):
+                pass
+        self.assertEqual(path.read_text(), original)
+
     def test_subprocess_failure_is_recorded(self):
         def failed(*args, **kwargs):
             return SimpleNamespace(returncode=7)
@@ -131,7 +163,9 @@ class AssetPipelineTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             pipeline.run(self.job, self.config, approve_blender=True, runner=timeout)
         self.assertEqual(pipeline.read_json(self.task_root / "asset-manifest.json")["status"], "Failed")
-        self.assertFalse((self.task_root / ".asset-pipeline.lock").exists())
+        self.assertTrue((self.task_root / ".asset-pipeline.lock").is_file())
+        with pipeline.task_lock(self.task_root):
+            pass
 
     def test_success_exit_without_outputs_is_failure(self):
         with self.assertRaisesRegex(RuntimeError, "Missing output"):
@@ -286,6 +320,18 @@ class AssetPipelineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["taskId"], "TASK-1")
         self.assertEqual(list(self.task_root.iterdir()), [self.source])
+
+    def test_cli_failure_returns_structured_current_error(self):
+        job_path, config_path = self.root / "job.json", self.root / "config.json"
+        pipeline.write_json(job_path, {**self.job, "input": "missing.glb"})
+        pipeline.write_json(config_path, self.config)
+        result = subprocess.run([sys.executable, str(ROOT / "adapters" / "asset_pipeline.py"),
+                                 str(job_path), "--config", str(config_path), "--plan"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        failure = json.loads(result.stdout)
+        self.assertEqual(failure["status"], "Failed")
+        self.assertIn("existing task-local GLB", failure["error"])
+        self.assertFalse((self.task_root / "outputs").exists())
 
 
 class QATests(unittest.TestCase):

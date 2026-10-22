@@ -50,13 +50,45 @@ $recovered.Dispose()
     def test_queue_rejects_duplicates_bad_ids_and_future_schema(self):
         source = r'''
 Import-Module '__MODULE__' -Force
-foreach ($json in @('[{"id":"../escape"}]', '[{"id":"X"},{"id":"X"}]', '[{"id":"X","schemaVersion":2}]', '[42]')) {
+foreach ($json in @('[{"id":"../escape"}]', '[{"id":"X"},{"id":"X"}]', '[{"id":"X","schemaVersion":2}]', '[42]', '[{"id":123}]', '[{"id":"CON"}]', '[{"id":"X","schemaVersion":true}]', '[{"id":"X","schemaVersion":"1"}]')) {
     $blocked = $false
     try { $null = @(ConvertTo-StudioTasks -Value (ConvertFrom-Json -InputObject $json)) } catch { $blocked = $true }
     if (-not $blocked) { throw "Accepted bad input: $json" }
 }
 '''
         self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Studio.Queue.psm1")))
+
+    def test_stale_queue_revision_preserves_external_edits(self):
+        with TemporaryDirectory() as folder:
+            source = r'''
+Import-Module '__MODULE__' -Force
+$path = Join-Path '__TEMP__' 'queue.json'
+$initial = Get-StudioQueueSnapshot -Path $path
+if ($initial.Revision -ne 'missing') { throw 'Missing queue revision failed' }
+$items = @([pscustomobject]@{ id='TASK-1'; title='Original' })
+$written = Write-StudioQueue -Path $path -Items $items -ExpectedRevision $initial.Revision -PassThruRevision
+$snapshot = Get-StudioQueueSnapshot -Path $path
+if ($snapshot.Revision -ne $written) { throw 'Write/read revision mismatch' }
+$external = '[{"id":"TASK-1","title":"GUI ændring"},{"id":"TASK-2"}]'
+[IO.File]::WriteAllText($path, $external)
+$blocked = $false
+try { Write-StudioQueue -Path $path -Items $items -ExpectedRevision $snapshot.Revision } catch {
+    if ($_.Exception.Message -notmatch 'revision conflict') { throw }
+    $blocked = $true
+}
+if (-not $blocked -or [IO.File]::ReadAllText($path) -ne $external) { throw 'External queue edit was overwritten' }
+if (@(Get-ChildItem '__TEMP__' -Filter '*.tmp').Count) { throw 'Temporary write files leaked' }
+$latest = Get-StudioQueueSnapshot -Path $path
+$latest.Tasks[0].title = 'Merged manually'
+$null = Write-StudioQueue -Path $path -Items $latest.Tasks -ExpectedRevision $latest.Revision -PassThruRevision
+if (@(Read-StudioQueue -Path $path).Count -ne 2) { throw 'GUI addition lost' }
+[IO.File]::Delete($path)
+$blocked = $false
+try { Write-StudioQueue -Path $path -Items $latest.Tasks -ExpectedRevision $latest.Revision } catch { $blocked = $true }
+if (-not $blocked -or (Test-Path $path)) { throw 'Deleted queue was recreated from stale data' }
+'''
+            self.execute(source.replace("__MODULE__", str(ROOT / "adapters" / "Studio.Queue.psm1"))
+                         .replace("__TEMP__", folder))
 
     def test_generate_request_and_rejected_response(self):
         with TemporaryDirectory() as folder:
@@ -113,6 +145,10 @@ function Write-Queue { param($Items) }
 function Fake-Python {
     if ($args -notcontains '--approve-blender' -or $args -notcontains '--resume') { throw 'Missing stage arguments' }
     if ($args -notcontains '--approve-unreal') { throw 'Unreal approval missing' }
+    if ($script:SimulateFailure) {
+        $global:LASTEXITCODE = 1
+        return '{"schemaVersion":1,"status":"Failed","error":"Unreal collision QA failed"}'
+    }
     $global:LASTEXITCODE = 0
     if ($CaptureUnrealPreview) {
         if ($args -notcontains 'unreal-qa' -or $args -notcontains '--capture') { throw 'Missing capture options' }
@@ -136,6 +172,13 @@ if ($job.target_size_m -ne 1.0) { throw 'Task scale was dropped' }
 $ValidateUnreal = $true; $CaptureUnrealPreview = $true
 Invoke-AssetStages -Task $task -Queue @($task)
 if ($task.status -ne 'AwaitingVisualReview' -or $task.progressPercent -ne 98) { throw 'Wrong capture result' }
+$script:SimulateFailure = $true
+$failed = $false
+try { Invoke-AssetStages -Task $task -Queue @($task) } catch {
+    if ($_.Exception.Message -notmatch 'Unreal collision QA failed') { throw }
+    $failed = $true
+}
+if (-not $failed -or -not $task.assetManifest) { throw 'Original pipeline error was not propagated' }
 '''
             self.execute(source.replace("__WORKER__", str(ROOT / "tools" / "project-manager-worker.ps1"))
                          .replace("__TEMP__", folder))

@@ -163,17 +163,40 @@ def find_project(path, allowed_roots):
 
 @contextmanager
 def task_lock(root):
+    """OS-held persistent-file lock; a process crash releases ownership automatically.
+
+    Do not unlink the file: unlinking a locked inode allows a second independent lock.
+    """
     path = Path(root) / ".asset-pipeline.lock"
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        raise RuntimeError("Task is locked; verify no process is running before recovering its lock") from None
-    try:
-        with os.fdopen(fd, "w") as stream:
-            stream.write(json.dumps({"pid": os.getpid(), "createdAt": now()}))
-        yield
-    finally:
-        path.unlink()
+    with path.open("a+b", buffering=0) as stream:
+        # Windows byte-range locking needs a byte to lock even for a newly created file.
+        if path.stat().st_size == 0:
+            stream.write(b"\n")
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise RuntimeError("Task is locked by another active asset pipeline") from None
+        try:
+            stream.seek(0)
+            if stream.read(1) != b"\n":
+                raise RuntimeError("Legacy task lock detected; verify old pipelines and tool processes are stopped before migrating the lock file")
+            # Leave the locked byte intact and record ownership after it.
+            stream.seek(1)
+            stream.truncate()
+            stream.write(json.dumps({"pid": os.getpid(), "createdAt": now()}).encode("utf-8"))
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def now():
@@ -372,6 +395,7 @@ def main():
         # ASCII JSON survives Windows PowerShell 5 pipe encodings; the JSON parser restores Unicode.
         print(json.dumps(result))
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(json.dumps({"schemaVersion": 1, "status": "Failed", "error": str(error)}))
         print(str(error), file=sys.stderr)
         return 1
     return 0

@@ -7,7 +7,7 @@ Blender or Unreal execution has been performed by this coding agent. M1 is pendi
 
 | Backlog | Implementation | Remaining evidence/work |
 | --- | --- | --- |
-| P0-001 | Worker reads legacy arrays, single tasks and value/Count wrappers; removes null entries; adds schemaVersion/defaults; atomically writes UTF-8 arrays | GUI uses its existing writer; cross-process GUI edit conflicts remain |
+| P0-001 | Worker reads legacy arrays, single tasks and value/Count wrappers; removes null entries; adds schemaVersion/defaults; atomically writes UTF-8 arrays; worker rejects stale queue revisions | GUI uses its existing writer; a fully shared transactional writer remains pending |
 | P0-002 | Exclusive OS-held worker lock with PID/version; process death releases handle | GUI version indicator; existing older workers do not honor this lock |
 | P0-004 | Task-local immutable attempt directories, checksums, metadata and manifests | Retention/cleanup policy |
 | P0-010 | Raw Base64, content type and GLB validation, rejected response preservation | Real API compatibility and Blender readability |
@@ -168,12 +168,34 @@ Both subprocesses have timeouts, per-attempt stdout/stderr and checked exit code
 Blender uses `--python-exit-code 1`, so a Python exception cannot appear successful.
 Unreal requires a success report with a StaticMesh in the assigned namespace.
 
-The task `.asset-pipeline.lock` prevents two asset runs for one task. If an operator
-terminates Python forcibly, verify Blender/Unreal are stopped before removing that
-task lock. The persistent queue `.worker.lock` uses an OS-held handle and can be
-reacquired after a crash without deleting the file. The queue lock protects this
-worker version only, not GUI writers or older versions. Do not edit the queue from
-the GUI during a long worker operation until shared queue coordination is added.
+The task `.asset-pipeline.lock` uses an OS-held byte/file lock. The lock file is
+persistent and must not be deleted during normal operation: ownership is released
+when Python exits, including forced termination. Legacy lock files from the older
+exclusive-create implementation are rejected without alteration; stop older
+pipelines/tool processes before an operator removes that legacy file once.
+A crashed Python process can leave Blender/Unreal subprocesses alive. Automatic
+release of the Python lock does not prove those tool processes have stopped; inspect
+them before resuming after a forced termination. Fresh attempts/import namespaces
+preserve earlier outputs.
+
+The persistent queue `.worker.lock` also uses an OS-held handle and can be reacquired
+after a crash without deleting the file. That queue lock protects this worker
+version only, not GUI writers or older versions. Queue reads capture a SHA256 revision
+of exactly the bytes parsed. Before publishing a new queue, the worker compares the
+current file revision with its last read/write revision. If the GUI changed or deleted
+the queue in the meantime, the worker stops with a revision-conflict error, preserves
+the GUI data and removes its temporary write file. Reload/restart after reviewing the
+conflict; do not bypass it by overwriting the queue.
+
+Revision checking detects edits already present at the pre-write check. It is not a
+fully transactional cross-process compare-and-swap: an uncoordinated GUI writer can
+still race in the final check/replace window. Shared GUI/worker queue transactions
+remain pending. Avoid simultaneous queue edits during worker processing.
+
+CLI failures return a structured JSON error on stdout and readable text on stderr,
+including errors before a new manifest can be written. The worker copies the current
+process error into the task failure and records the manifest link before execution.
+It does not substitute an older failure manifest for the current error.
 
 ## Tests and API references
 
