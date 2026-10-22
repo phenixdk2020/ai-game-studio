@@ -128,4 +128,32 @@ genkørsel eller en vellykket kvalitetsprøve.
 Den rigtige worker og CLI blev desuden kørt mod en isoleret testkø med den
 kørende app. `decode_settings` gik gennem `Queued` → `AwaitingVisualReview` →
 `Completed` efter eksplicit testgodkendelse. Produktionskøer blev ikke læst eller
-ændret. Andre apps blev søgt frem, men ikke startet eller erklæret fungerende.
+ændret. Denne første validering omfattede Hunyuan; ComfyUI blev efterfølgende
+tilsluttet og afprøvet som beskrevet nedenfor.
+
+### Virkelig ComfyUI-billedtest
+
+ComfyUI blev fundet gennem `pterm`, startet med den eksisterende launcher og
+kontrolleret gennem readiness-probe og de offentlige node-API'er. En isoleret
+`art_world`-opgave blev oprettet med den rigtige CLI og behandlet af den rigtige
+worker mod den kørende app:
+
+- Opgave: `TASK-844B4124227A4291887D`.
+- Prompt-ID: `727ecf08-14c0-4565-aa7b-a5fd1ca75317`.
+- Installeret checkpoint: `juggernautXL_v8Rundiffusion.safetensors`.
+- Syntetisk motiv: en blå trækasse på neutral baggrund; 512×512, 16 trin, seed 1234.
+- PNG: 322.758 bytes, SHA-256 `3f19c3947e2e817b356c4dc17a277887dcf0aa0cb09f7fa6c907036a9fb86ac7`.
+- Billedet blev hentet gennem `/view`, kontrolleret som PNG og gennemset visuelt.
+- Opgaven nåede `AwaitingVisualReview`. En eksplicit `resume-tool` gennem CLI og
+  worker returnerede samme prompt-ID og samme filhash; ingen ny generering blev sendt.
+- Den isolerede testopgave kunne derefter godkendes til `Completed`.
+
+Appens log rapporterede cirka 310 sekunder inklusive kold modelindlæsning;
+selve de 16 samplingtrin tog cirka 12 sekunder. Dette er forbindelsesbevis,
+ikke en generel hastighedsmåling eller godkendelse som et færdigt spilasset.
+Ingen produktionskø blev brugt, og der blev ikke hentet en ny model af klienten.
+
+Regression: 116 tests kørt på Windows, 114 bestået og 2 miljøafhængige skips.
+GitHub-kontrollerne bestod også. Både workflow/history/PNG, forkert app-valg,
+fejltilstande, eksplicit genoptagelse og en isoleret CLI/worker/HTTP/godkendelsesrunde
+indgår i testene. Animationsværktøjer mangler fortsat udførelsesadaptere.
