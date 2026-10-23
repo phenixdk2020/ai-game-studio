@@ -3,7 +3,7 @@
 Real V11 adds the first controlled Blender execution adapter.
 
 - Existing `tasks/`, `results/`, `logs/`, `state/` remain local and are not part of this update payload.
-- Blender jobs run headless and produce evidence logs in `C:\ai-game-studio-workspace\blender`.
+- Blender jobs run headless and produce evidence logs in `C:\Users\allan\Dropbox\AI-Game-Studio\workspace\blender`.
 - Asset writes are denied by default. `--approve-write` / `-ApproveWrite` is required for a job declaring `write_asset=true`.
 - `make-skeleton-job.ps1` creates a starter humanoid skeleton job specification; `blender-job.ps1` executes it only with explicit write approval.
 - Git update/release scripts handle Git stderr without treating normal push/pull progress as a PowerShell failure.
@@ -12,7 +12,7 @@ Example:
 
 ```powershell
 C:\ai-game-studio\tools\make-skeleton-job.ps1
-C:\ai-game-studio\tools\blender-job.ps1 -Job C:\ai-game-studio-workspace\jobs\skeleton_stub.json -ApproveWrite
+C:\ai-game-studio\tools\blender-job.ps1 -Job C:\Users\allan\Dropbox\AI-Game-Studio\workspace\jobs\skeleton_stub.json -ApproveWrite
 ```
 
 ## Automated tests
