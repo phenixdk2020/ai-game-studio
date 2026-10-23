@@ -5,6 +5,9 @@ logs/
 state/
 state-backup-*/
 
+# Generated assets and local working files
+workspace/
+
 # Python
 __pycache__/
 *.py[cod]
