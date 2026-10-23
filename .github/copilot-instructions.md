@@ -20,7 +20,7 @@ agents/, adapters/, config/, core/, tools/, tests/, .github/, AGENTS.md, README.
 - state/
 
 ## Generated assets
-Generated production assets belong under C:\ai-game-studio-workspace, not inside this repository.
+Generated production assets belong under C:\ai-game-studio\workspace. This is a local, Git-ignored directory within the project checkout. Never commit workspace contents.
 
 ## Blender and Unreal
 Never claim Blender or Unreal execution succeeded unless actual execution evidence is available.
