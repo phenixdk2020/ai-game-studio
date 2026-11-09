@@ -18,7 +18,8 @@ def main(argv=None):
     add = commands.add_parser('add')
     add.add_argument('id')
     add.add_argument('--name', required=True)
-    add.add_argument('--repository', required=True)
+    add.add_argument('--kind', choices=('github', 'local'), default='github')
+    add.add_argument('--repository', default='')
     add.add_argument('--base-branch', default='main')
     add.add_argument('--project-path', default='')
     validation = add.add_mutually_exclusive_group(required=True)
@@ -35,8 +36,13 @@ def main(argv=None):
                 raise ValueError('Project ID must contain letters, numbers, underscores or hyphens')
             if args.id in registry['projects']:
                 raise ValueError('Project ID already exists; existing projects are not overwritten')
-            if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repository):
+            if args.kind == 'github' and not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repository):
                 raise ValueError('Repository must be owner/name')
+            if args.kind == 'local':
+                from local_project import project_root
+                project_root(args.project_path)
+                if args.repository:
+                    raise ValueError('Local projects do not use a GitHub repository')
             if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', args.base_branch) or '..' in args.base_branch:
                 raise ValueError('Invalid base branch')
             tests = json.loads(args.validation_file.read_text(encoding='utf-8-sig') if args.validation_file else args.validation_json)
@@ -44,7 +50,7 @@ def main(argv=None):
                 raise ValueError('Provide project test commands as a JSON array of argument arrays')
             if not args.name.strip():
                 raise ValueError('Project name is required')
-            registry['projects'][args.id] = dict(name=args.name.strip(), repository=args.repository, base_branch=args.base_branch,
+            registry['projects'][args.id] = dict(name=args.name.strip(), kind=args.kind, repository=args.repository, base_branch=args.base_branch,
                 project_path=args.project_path, validation_commands=tests, enabled=True)
             path.parent.mkdir(parents=True, exist_ok=True)
             write_json(path, registry)

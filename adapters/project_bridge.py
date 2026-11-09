@@ -55,7 +55,7 @@ def validate(task, config):
     role = role_name(task.get("role") or task.get("agent"))
     if role not in config["roles"]:
         raise ValueError(f"Unknown specialist role: {role}")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", config["repository"]):
+    if config.get('project_kind') != 'local' and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", config["repository"]):
         raise ValueError("Invalid configured GitHub repository")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./-]*", config["base_branch"]) or ".." in config["base_branch"]:
         raise ValueError("Invalid configured base branch")
@@ -82,6 +82,8 @@ def validate(task, config):
     if task.get('projectId'):
         source['projectId'] = task['projectId']
         payload['validation_commands'] = config['validation_commands']
+    if config.get('project_kind') == 'local':
+        payload['local_project_root'] = config['local_project_root']
     signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return directory, role, source, signature
 
@@ -156,7 +158,7 @@ class Bridge:
     def command(self, args, label, cwd=None, timeout=None, check=True):
         result = self.runner(args, cwd=str(cwd or ROOT), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout or self.config["command_timeout"],
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1"})
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "PYTHONDONTWRITEBYTECODE": "1"})
         (self.path / (label + ".stdout.txt")).write_text(result.stdout or "", encoding="utf-8")
         (self.path / (label + ".stderr.txt")).write_text(result.stderr or "", encoding="utf-8")
         if check and result.returncode:
@@ -184,6 +186,11 @@ class Bridge:
             "Local Blender/Unreal execution evidence is collected separately by the studio runner.\n")
         if self.task.get('projectId'):
             prompt += ('\nSelected project: ' + self.task['projectId'] + '\nTarget repository: ' + self.config['repository'] + '\nBase branch: ' + self.config['base_branch'] + '\n')
+        if self.config.get('project_kind') == 'local':
+            prompt = prompt.replace('Return changes through a pull request.',
+                'This is a LOCAL FOLDER project. Change only the isolated working directory supplied with -C. '
+                'Do not access or modify the original game folder. Do not use GitHub, push, create PRs or apply changes outside this copy. '
+                'Return code changes in this working copy for local operator review.')
         if self.source["attachments"]:
             prompt += "Reference paths (do not claim to have read unavailable files):\n" + json.dumps(self.source["attachments"]) + "\n"
             if self.task['backend'] == 'copilot-github':
@@ -219,7 +226,8 @@ class Bridge:
         if not isinstance(content, str) or not content.strip():
             raise ValueError("Empty model result")
         if planning:
-            plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"], code_backend(self.config))
+            plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"],
+                                  'copilot-local' if self.config.get('project_kind') == 'local' else code_backend(self.config))
             target = self.path / "plan.json"
             write_json(target, plan)
         else:
@@ -265,30 +273,13 @@ class Bridge:
         return checkout
 
     def local_copilot(self, receipt):
+        if self.config.get('project_kind') == 'local':
+            return self.local_folder_copilot(receipt)
         checkout = self.clone(receipt)
         branch = "studio/" + self.task["id"].lower() + "-" + uuid.uuid4().hex[:8]
         git = self.tool("git")
         self.command([git, "checkout", "-b", branch, "origin/" + self.config["base_branch"]], "local-branch", checkout)
-        receipt.update(branch=branch, stage="copilot-local", status="Running")
-        self.save(receipt)  # A crash after this point must not start another coding session.
-        session = str(uuid.uuid4())
-        receipt["sessionName"] = session
-        self.save(receipt)
-        execution = self.command([self.tool("copilot"), "-C", str(checkout), "--trust-folder", "--name", session,
-            "--no-auto-update", "--disable-builtin-mcps", "--no-remote", "--no-ask-user", "--allow-all-tools",
-            "--deny-tool=shell(git push)", "--deny-tool=shell(gh pr create)", "--output-format=json",
-            "--log-dir", str(self.path / "copilot-logs"), "-p", self.prompt()], "copilot", checkout)
-        for line in execution.stdout.splitlines():
-            try:
-                event = json.loads(line)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(event, dict):
-                data = event.get('data', {})
-                identity = event.get('sessionId') or (data.get('sessionId') if isinstance(data, dict) else None)
-                if isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,199}', identity):
-                    receipt['sessionId'] = identity
-        self.save(receipt)
+        self.execute_copilot(checkout, receipt, branch)
         changed = self.command([git, "status", "--porcelain", "--untracked-files=all"], "local-status", checkout).stdout
         committed = self.command([git, 'diff', '--name-only', 'origin/' + self.config['base_branch'], 'HEAD'], 'local-committed', checkout).stdout
         if not changed.strip() and not committed.strip():
@@ -311,6 +302,87 @@ class Bridge:
         receipt["validatedHead"] = self.command([git, "rev-parse", "HEAD"], "local-head", checkout).stdout.strip()
         receipt.update(status="AwaitingCodeReview", stage="code-review", resultPath=str(self.path / "validation.json"),
                        question="Local tests passed; review the draft PR. No merge or local installation update was performed.")
+
+    def execute_copilot(self, checkout, receipt, branch):
+        receipt.update(branch=branch, stage="copilot-local", status="Running")
+        self.save(receipt)  # A crash after this point must not start another coding session.
+        session = str(uuid.uuid4())
+        receipt["sessionName"] = session
+        self.save(receipt)
+        execution = self.command([self.tool("copilot"), "-C", str(checkout), "--trust-folder", "--name", session,
+            "--no-auto-update", "--disable-builtin-mcps", "--no-remote", "--no-ask-user", "--allow-all-tools",
+            "--deny-tool=shell(git push)", "--deny-tool=shell(gh pr create)", "--output-format=json",
+            "--log-dir", str(self.path / "copilot-logs"), "-p", self.prompt()], "copilot", checkout)
+        for line in execution.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(event, dict):
+                data = event.get('data', {})
+                identity = event.get('sessionId') or (data.get('sessionId') if isinstance(data, dict) else None)
+                if isinstance(identity, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,199}', identity):
+                    receipt['sessionId'] = identity
+        self.save(receipt)
+
+    def local_folder_copilot(self, receipt):
+        from local_project import snapshot, digest
+        checkout = self.path / ('local-copy-' + uuid.uuid4().hex[:12])
+        baseline = snapshot(self.config['local_project_root'], checkout)
+        receipt.update(checkout=str(checkout), stage='local-snapshot')
+        write_json(self.path/'local-source.json', baseline)
+        receipt['sourceManifestDigest'] = digest(self.path/'local-source.json')
+        self.save(receipt)
+        git = self.tool('git')
+        branch = 'studio/' + self.task['id'].lower() + '-' + uuid.uuid4().hex[:8]
+        self.command([git, '-c', 'init.templateDir=', 'init', '-b', branch], 'local-init', checkout)
+        self.command([git, 'add', '--force', '--all'], 'snapshot-stage', checkout)
+        self.local_commit(checkout, 'Local project snapshot', 'snapshot-commit', allow_empty=True)
+        head = self.command([git, 'rev-parse', 'HEAD'], 'snapshot-head', checkout).stdout.strip()
+        self.command([git, 'update-ref', 'refs/remotes/origin/' + self.config['base_branch'], head], 'snapshot-reference', checkout)
+        receipt['snapshotHead'] = head
+        self.save(receipt)
+        self.execute_copilot(checkout, receipt, branch)
+        changed = self.command([git, 'status', '--porcelain', '--untracked-files=all'], 'local-status', checkout).stdout
+        if changed.strip():
+            self.command([git, 'add', '--all'], 'stage', checkout)
+            self.local_commit(checkout, self.task['id'] + ': ' + self.task['title'], 'commit')
+        self.finish_local_review(checkout, receipt)
+
+    def local_commit(self, checkout, message, label, allow_empty=False):
+        arguments = [self.tool('git'), '-c', 'user.name=AI Game Studio', '-c', 'user.email=local@studio.invalid', 'commit', '-m', message]
+        if allow_empty:
+            arguments.append('--allow-empty')
+        self.command(arguments, label, checkout)
+
+    def finish_local_review(self, checkout, receipt):
+        from local_project import digest, safe_path
+        git = self.tool('git')
+        receipt.update(stage='local-validation', status='Running')
+        self.save(receipt)
+        baseline = read_json(self.path/'local-source.json')
+        if digest(self.path/'local-source.json') != receipt['sourceManifestDigest']:
+            raise ValueError('Original project manifest changed')
+        if self.command([git, 'status', '--porcelain', '--untracked-files=all'], 'local-review-status', checkout).stdout.strip():
+            raise ValueError('Commit changes in the local working copy before revalidation')
+        self.validate_checkout(checkout, receipt)
+        names = self.command([git, '-c', 'core.quotepath=false', 'ls-files', '-z'], 'local-files', checkout).stdout.split('\0')
+        after = {name: digest(safe_path(checkout, name)) for name in names if name}
+        changed = sorted(name for name in baseline.keys() | after.keys() if baseline.get(name) != after.get(name))
+        if not changed:
+            raise ValueError('Copilot returned no local code changes')
+        head = self.command([git, 'rev-parse', 'HEAD'], 'local-head', checkout).stdout.strip()
+        patch = self.command([git, 'diff', '--binary', receipt['snapshotHead'], 'HEAD'], 'local-diff', checkout).stdout
+        (self.path/'changes.patch').write_text(patch, encoding='utf-8')
+        write_json(self.path/'local-review.json', dict(source=self.config['local_project_root'], before=baseline, after=after, head=head, changed=changed))
+        receipt['localReviewDigest'] = digest(self.path/'local-review.json')
+        (self.path/'review.md').write_text('# Lokale kodeaendringer\n\n' + self.task['title'] +
+            '\n\nProjektets tests er bestaaet. Originalmappen er endnu ikke opdateret.\n\nAendrede filer:\n' +
+            '\n'.join('- ' + name for name in changed) + '\n\nArbejdskopi: ' + str(checkout) +
+            '\n\nDiff: ' + str(self.path/'changes.patch') + '\n\nTestresultater: ' + str(self.path/'validation.json') +
+            '\n\nGennemse koden. Godkend resultat / plan overfoerer aendringerne til projektmappen med backup og konfliktkontrol.\n', encoding='utf-8')
+        receipt.update(status='AwaitingCodeReview', stage='local-code-review', validatedHead=head,
+                       resultPath=str(self.path/'review.md'), question='Gennemse arbejdskopi og changes.patch. Godkend resultat / plan anvender de lokale aendringer med backup; originalen er endnu ikke opdateret.')
 
     def parse_url(self, text):
         urls = re.findall(r"https://github\.com/" + re.escape(self.config["repository"]) + r"/pull/[1-9][0-9]*", text)
@@ -410,10 +482,35 @@ class Bridge:
         receipt.update(status="AwaitingCodeReview", stage="code-review", resultPath=str(self.path / "validation.json"),
                        question="GitHub code was checked out and tested locally at the recorded SHA. Review the PR; no merge/deployment was performed.")
 
-    def verify_review(self):
+    def verify_review(self, apply_local=False, expected_head=None):
         receipt = read_json(self.receipt_path)
         if receipt.get('signature') != self.signature or receipt.get('status') != 'AwaitingCodeReview':
             raise ValueError('No current validated code result')
+        if self.config.get('project_kind') == 'local':
+            from local_project import apply_review, digest, manifest
+            if expected_head is not None and expected_head != receipt.get('validatedHead'):
+                raise ValueError('Validated head changed')
+            if apply_local and not expected_head:
+                raise ValueError('Local approval requires the reviewed expected head')
+            review_path = self.path/'local-review.json'
+            if digest(review_path) != receipt.get('localReviewDigest'):
+                raise ValueError('Local review was modified; refuse application')
+            review = read_json(review_path)
+            checkout = Path(receipt['checkout'])
+            head = self.command([self.tool('git'), 'rev-parse', 'HEAD'], 'review-head', checkout).stdout.strip()
+            dirty = self.command([self.tool('git'), 'status', '--porcelain', '--untracked-files=all'], 'review-status', checkout).stdout
+            if head != receipt['validatedHead'] or review['head'] != head or dirty.strip():
+                raise ValueError('Reviewed workspace changed; validate again')
+            if apply_local:
+                with task_lock(self.directory):
+                    apply_review(self.config['local_project_root'], checkout, review, self.path/'local-backup')
+                    receipt['localApplied'] = True
+                    self.save(receipt)
+            elif not receipt.get('localApplied'):
+                raise ValueError('Local changes require explicit review approval before application')
+            if manifest(self.config['local_project_root']) != review['after']:
+                raise ValueError('Local result is no longer applied at the reviewed version')
+            return {'taskId': self.task['id'], 'status': 'Verified', 'validatedHead': head, 'localApplied': True}
         metadata = json.loads(self.command([self.tool('github'), 'pr', 'view', receipt['prUrl'], '--repo', self.config['repository'], '--json', 'url,headRefOid,baseRefName,isCrossRepository,state'], 'review-head').stdout)
         if (metadata.get('url') != receipt['prUrl'] or metadata.get('headRefOid') != receipt.get('validatedHead')
                 or metadata.get('baseRefName') != self.config['base_branch'] or metadata.get('isCrossRepository') is not False):
@@ -444,6 +541,21 @@ class Bridge:
             if revalidate or bind_session or bind_pr:
                 if not receipt or self.task['backend'] not in {'copilot-local','copilot-github'}:
                     raise ValueError('No existing coding receipt to reconcile')
+                if self.config.get('project_kind') == 'local':
+                    if bind_session or bind_pr:
+                        raise ValueError('Local folder jobs do not bind GitHub PRs or sessions')
+                    if receipt.get('localApplied'):
+                        raise ValueError('Create a new task for an already applied local change')
+                    checkout = Path(receipt.get('checkout', ''))
+                    if not (checkout/'.git').is_dir() or not receipt.get('snapshotHead'):
+                        raise ValueError('No existing local snapshot to revalidate')
+                    try:
+                        self.finish_local_review(checkout, receipt)
+                        receipt.update(error='')
+                    except Exception as error:
+                        receipt.update(status='Failed', error=str(error))
+                    self.save(receipt)
+                    return self.result(receipt)
                 if bind_pr:
                     pr_number(bind_pr, self.config['repository'])
                     receipt['prUrl'] = bind_pr
@@ -503,14 +615,19 @@ def main():
     parser.add_argument('--bind-session')
     parser.add_argument('--bind-pr')
     parser.add_argument('--verify-review', action='store_true')
+    parser.add_argument('--apply-local', action='store_true', help='Explicit approval to apply reviewed local folder changes')
+    parser.add_argument('--expected-head', help='Reviewed code SHA required for local application')
     parser.add_argument('--resume-tool', action='store_true')
     parser.add_argument("--plan", action="store_true", help="Show backend/role without dispatch or filesystem writes")
     args = parser.parse_args()
+    if args.apply_local and not args.verify_review:
+        parser.error('--apply-local requires --verify-review')
     try:
         bridge = Bridge(read_json(args.task), read_json(args.config))
         result = {"taskId": bridge.task["id"], "backend": bridge.task["backend"], "role": bridge.role,
                   "directory": str(bridge.directory), "projectId": bridge.task.get('projectId', ''),
-                  "repository": bridge.config['repository'], "base_branch": bridge.config['base_branch']} if args.plan else (bridge.verify_review() if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
+                  "repository": bridge.config['repository'], "projectKind": bridge.config.get('project_kind', 'github'),
+                  "base_branch": bridge.config['base_branch']} if args.plan else (bridge.verify_review(args.apply_local, args.expected_head) if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
         print(json.dumps(result))
         return 0
     except Exception as error:

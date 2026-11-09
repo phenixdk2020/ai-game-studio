@@ -21,10 +21,24 @@ def project_config(task, config):
     project = registry['projects'].get(project_id)
     if not isinstance(project, dict) or project.get('enabled', True) is not True:
         raise ValueError('Unknown or disabled project: ' + project_id)
-    for key in ('repository', 'base_branch', 'validation_commands'):
+    kind = project.get('kind', 'github')
+    if kind not in {'github', 'local'}:
+        raise ValueError('Project kind must be github or local')
+    effective['project_kind'] = kind
+    for key in ('base_branch', 'validation_commands'):
         if key not in project:
             raise ValueError('Project requires ' + key)
         effective[key] = copy.deepcopy(project[key])
+    if kind == 'github':
+        if not project.get('repository'):
+            raise ValueError('GitHub project requires repository')
+        effective['repository'] = project['repository']
+    else:
+        from local_project import project_root
+        effective['local_project_root'] = str(project_root(project.get('project_path', '')))
+        effective['repository'] = ''
+        if task.get('backend') == 'copilot-github':
+            raise ValueError('A local project requires copilot-local; GitHub cloud cannot access its folder')
     # Executables, job paths and permissions cannot be overridden by a project.
     effective['project_id'] = project_id
     return effective

@@ -84,14 +84,15 @@ function Approve-StudioResult {
     }
     if ($task.status -eq 'AwaitingCodeReview') {
         $taskFile=Join-Path $Root "data/pipeline-jobs/$Id/bridge-task.json"
-        $response=& python (Join-Path $PSScriptRoot 'project_bridge.py') $taskFile --config (Join-Path $Root 'config/orchestrator.json') --verify-review
-        if ($LASTEXITCODE -ne 0) { throw ($response -join "`n") }
-        $verified=($response -join "`n")|ConvertFrom-Json
-        if ($verified.validatedHead -ne $task.validatedHead) { throw 'Validated head changed.' }
         $original=Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8|ConvertFrom-Json
         foreach($name in @('title','description','backend','role','attachments','projectPath','projectId')) {
             if ((ConvertTo-Json -InputObject $original.$name -Depth 40 -Compress) -ne (ConvertTo-Json -InputObject $task.$name -Depth 40 -Compress)) { throw 'Task changed since validation.' }
         }
+        $response=& python (Join-Path $PSScriptRoot 'project_bridge.py') $taskFile --config (Join-Path $Root 'config/orchestrator.json') --verify-review --apply-local --expected-head $task.validatedHead
+        if ($LASTEXITCODE -ne 0) { throw ($response -join "`n") }
+        $verified=($response -join "`n")|ConvertFrom-Json
+        if ($verified.validatedHead -ne $task.validatedHead) { throw 'Validated head changed.' }
+        if($verified.localApplied){$task | Add-Member -NotePropertyName question -NotePropertyValue 'Lokale kodeaendringer er anvendt med backup.' -Force}
     }
     if ($task.status -eq 'AwaitingPlanReview') {
         $jobsRoot='data/pipeline-jobs'
