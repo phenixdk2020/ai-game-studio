@@ -15,8 +15,12 @@ $q=Join-Path $Root 'tasks\queue.gui.json'; New-Item -ItemType Directory -Force -
 <Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="215"/></Grid.RowDefinitions>
 <StackPanel Orientation="Horizontal" Margin="0,0,0,10"><Button Name="NewBtn" Content="Ny opgave"/><Button Name="SaveBtn" Content="Gem"/><Button Name="PauseBtn" Content="Pause/Forts&#230;t"/><Button Name="CancelBtn" Content="Annuller"/><Button Name="DeleteBtn" Content="Slet"/><Button Name="UpBtn" Content="Flyt op"/><Button Name="DownBtn" Content="Flyt ned"/><Button Name="WorkerBtn" Content="Start worker"/><Button Name="RetryBtn" Content="Pr&#248;v igen"/><Button Name="LogBtn" Content="&#197;bn worker-log"/><Button Name="RefreshBtn" Content="Opdater"/><TextBlock Name="WorkerState" Foreground="#4ADE80" FontWeight="Bold" FontSize="14" Margin="18,9"/></StackPanel>
 <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="44*"/><ColumnDefinition Width="56*"/></Grid.ColumnDefinitions>
-<DataGrid Name="Queue" AutoGenerateColumns="False" IsReadOnly="True" Margin="0,0,12,0" Background="#1E293B" Foreground="#F8FAFC" RowBackground="#1E293B" AlternatingRowBackground="#334155" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#475569" HeadersVisibility="Column" ColumnHeaderHeight="36"><DataGrid.ColumnHeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#334155"/><Setter Property="Foreground" Value="White"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="14"/><Setter Property="Padding" Value="8"/><Setter Property="BorderBrush" Value="#64748B"/></Style></DataGrid.ColumnHeaderStyle><DataGrid.Columns><DataGridTextColumn Header="#" Binding="{Binding priority}" Width="38"/><DataGridTextColumn Header="STATUS" Binding="{Binding status}" Width="125"/><DataGridTextColumn Header="AGENT" Binding="{Binding agent}" Width="165"/><DataGridTextColumn Header="OPGAVE" Binding="{Binding title}" Width="*"/></DataGrid.Columns></DataGrid>
+<DataGrid Name="Queue" AutoGenerateColumns="False" IsReadOnly="True" Margin="0,0,12,0" Background="#1E293B" Foreground="#F8FAFC" RowBackground="#1E293B" AlternatingRowBackground="#334155" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#475569" HeadersVisibility="Column" ColumnHeaderHeight="36"><DataGrid.ColumnHeaderStyle><Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#334155"/><Setter Property="Foreground" Value="White"/><Setter Property="FontWeight" Value="Bold"/><Setter Property="FontSize" Value="14"/><Setter Property="Padding" Value="8"/><Setter Property="BorderBrush" Value="#64748B"/></Style></DataGrid.ColumnHeaderStyle><DataGrid.Columns><DataGridTextColumn Header="PROJEKT" Binding="{Binding projectId}" Width="100"/><DataGridTextColumn Header="#" Binding="{Binding priority}" Width="38"/><DataGridTextColumn Header="STATUS" Binding="{Binding status}" Width="125"/><DataGridTextColumn Header="AGENT" Binding="{Binding agent}" Width="165"/><DataGridTextColumn Header="OPGAVE" Binding="{Binding title}" Width="*"/></DataGrid.Columns></DataGrid>
 <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"><StackPanel>
+<TextBlock Text="SPILPROJEKT" Style="{StaticResource LabelStyle}"/>
+<DockPanel><Button Name="ManageProjectsBtn" DockPanel.Dock="Right" Content="Nyt projekt..."/><ComboBox Name="GameProject" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="200"/></DockPanel>
+<TextBlock Text="Kode og planer kraever et valgt projekt. Hvert projekt bruger sit eget repository." Foreground="#A7F3D0" TextWrapping="Wrap"/>
+
 <TextBlock Text="PIPELINE" Style="{StaticResource LabelStyle}"/>
 <UniformGrid Columns="4" Margin="0,4,0,12">
 <Border Name="StageHunyuan" Background="#334155" CornerRadius="5" Margin="2" Padding="8"><TextBlock Text="1  HUNYUAN3D" Foreground="White" FontWeight="Bold" HorizontalAlignment="Center"/></Border>
@@ -44,12 +48,43 @@ function ReadQ {
     $script:guiRevision = $snapshot.Revision
     $snapshot.Tasks
 }
+$GameProject=$w.FindName('GameProject')
+$ManageProjectsBtn=$w.FindName('ManageProjectsBtn')
+function Update-StudioProjects {
+    $selected=[string]$GameProject.SelectedValue
+    $registryPath=Join-Path $Root 'config/projects.json'
+    $items=@()
+    if(Test-Path -LiteralPath $registryPath){
+        $registry=Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach($property in $registry.projects.PSObject.Properties){
+            $project=$property.Value
+            if($project.enabled -eq $false){continue}
+            $items += [pscustomobject]@{id=$property.Name;name=([string]$project.name+' ('+$property.Name+')');projectPath=[string]$project.project_path}
+        }
+    }
+    $GameProject.ItemsSource=$items
+    $GameProject.SelectedValue=$selected
+}
+$GameProject.Add_SelectionChanged({
+    if($GameProject.SelectedItem){$ProjectPath.Text=[string]$GameProject.SelectedItem.projectPath}
+})
+$ManageProjectsBtn.Add_Click({
+    & (Join-Path $Root 'tools/studio-project-settings.ps1') -Root $Root
+    Update-StudioProjects
+})
+Update-StudioProjects
+
 function Save-StudioForm {
+    if(-not $GameProject.SelectedValue){throw 'Vaelg eller registrer et spilprojekt foer du gemmer opgaven.'}
     if ([string]::IsNullOrWhiteSpace($Title.Text)) { throw 'Angiv en titel.' }
     $toolArguments=ConvertFrom-Json -InputObject $ToolParameters.Text
     if($toolArguments -isnot [pscustomobject]){throw 'Værktøjsparametre skal være et JSON-objekt.'}
     $snapshot = Get-StudioQueueSnapshot -Path $q
     $selected = $Queue.SelectedItem
+    foreach($dependency in @($Dependencies.Text -split '[,\s]+' | Where-Object {$_})){
+        $parent=@($snapshot.Tasks | Where-Object id -eq $dependency)
+        if($parent.Count -ne 1 -or [string]$parent[0].projectId -ne [string]$GameProject.SelectedValue){throw 'Afhaengigheder skal tilhoere samme spilprojekt.'}
+    }
     if ($selected) {
         $task = @($snapshot.Tasks | Where-Object id -eq $selected.id)[0]
         Assert-EditableTaskCurrent $selected $task
@@ -61,6 +96,7 @@ function Save-StudioForm {
         $task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force
     }
     foreach($pair in @(@('toolCapability',$ToolCapability.Text),@('toolOperation',$ToolOperation.Text),@('toolAppId',$ToolAppId.Text),@('toolParameters',$toolArguments))){$task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
+    $task | Add-Member -NotePropertyName projectId -NotePropertyValue ([string]$GameProject.SelectedValue) -Force
     Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision
     RefreshQ
 }
@@ -76,7 +112,7 @@ function Assert-EditableTaskCurrent($displayed, $fresh) {
     }
 }
 function RefreshQ{foreach($control in @($ToolCapability,$ToolOperation,$ToolAppId,$ToolParameters)){if($control.IsKeyboardFocusWithin){return}};if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
-function ClearForm{$Title.Text='';$Description.Text='';$Agent.Text='auto';$ProjectPath.Text='';$NewProject.IsChecked=$false;$Attachments.Items.Clear();$Question.Text='';$Feedback.Text=''}
+function ClearForm{$GameProject.SelectedIndex=-1;$Title.Text='';$Description.Text='';$Agent.Text='auto';$ProjectPath.Text='';$NewProject.IsChecked=$false;$Attachments.Items.Clear();$Question.Text='';$Feedback.Text=''}
 function MoveTask([int]$d){$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ|Sort-Object priority);$sel=$a|?{$_.id-eq$t.id}|Select-Object -First 1;if(!$sel){return};$i=[array]::IndexOf($a,$sel);$n=$i+$d;if($n-lt 0-or$n-ge$a.Count){return};$tmp=$a[$i];$a[$i]=$a[$n];$a[$n]=$tmp;for($j=0;$j-lt$a.Count;$j++){$a[$j].priority=$j+1};WriteQ $a;RefreshQ}
 function PaintPipeline($t){
  foreach($b in @($StageHunyuan,$StageBlender,$StageQA,$StageUnreal)){$b.Background='#334155'}
@@ -94,7 +130,7 @@ function PaintPipeline($t){
   elseif($stage -match 'unreal'){$StageUnreal.Background='#DC2626'}
  }
 }
-$Queue.Add_SelectionChanged({$t=$Queue.SelectedItem;if(!$t){return};$Title.Text=[string]$t.title;$Description.Text=[string]$t.description;$Agent.Text=[string]$t.agent;$ProjectPath.Text=[string]$t.projectPath;$NewProject.IsChecked=[bool]$t.newProject;$Attachments.Items.Clear();@($t.attachments)|%{[void]$Attachments.Items.Add($_)};$Question.Text=[string]$t.question;PaintPipeline $t;if($t.status -eq 'Running' -and $t.toolProgressPath -and (Test-Path -LiteralPath $t.toolProgressPath -PathType Leaf)){$Feedback.Text=Get-Content -LiteralPath $t.toolProgressPath -Raw -Encoding UTF8}elseif($t.resultPath-and(Test-Path -LiteralPath $t.resultPath -PathType Leaf)){$Feedback.Text=Get-Content -LiteralPath $t.resultPath -Raw}else{$Feedback.Text="ID: $($t.id)`r`nStatus: $($t.status)`r`nAgent: $($t.agent)`r`nPipeline: $($t.pipeline)`r`nStage: $($t.pipelineStage)`r`nError: $($t.error)"}})
+$Queue.Add_SelectionChanged({$t=$Queue.SelectedItem;if(!$t){return};$GameProject.SelectedValue=[string]$t.projectId;$Title.Text=[string]$t.title;$Description.Text=[string]$t.description;$Agent.Text=[string]$t.agent;$ProjectPath.Text=[string]$t.projectPath;$NewProject.IsChecked=[bool]$t.newProject;$Attachments.Items.Clear();@($t.attachments)|%{[void]$Attachments.Items.Add($_)};$Question.Text=[string]$t.question;PaintPipeline $t;if($t.status -eq 'Running' -and $t.toolProgressPath -and (Test-Path -LiteralPath $t.toolProgressPath -PathType Leaf)){$Feedback.Text=Get-Content -LiteralPath $t.toolProgressPath -Raw -Encoding UTF8}elseif($t.resultPath-and(Test-Path -LiteralPath $t.resultPath -PathType Leaf)){$Feedback.Text=Get-Content -LiteralPath $t.resultPath -Raw}else{$Feedback.Text="ID: $($t.id)`r`nStatus: $($t.status)`r`nAgent: $($t.agent)`r`nPipeline: $($t.pipeline)`r`nStage: $($t.pipelineStage)`r`nError: $($t.error)"}})
 $NewBtn.Add_Click({$Queue.SelectedItem=$null;ClearForm})
 $SaveBtn.Add_Click({Invoke-StudioUiAction {Save-StudioForm}})
 $PauseBtn.Add_Click({$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ);$i=$a|?{$_.id-eq$t.id}|Select-Object -First 1;$i.status=if($i.status-eq'Paused'){'Queued'}else{'Paused'};WriteQ $a;RefreshQ});$CancelBtn.Add_Click({$t=$Queue.SelectedItem;if($t){$a=@(ReadQ);($a|?{$_.id-eq$t.id}).status='Cancelled';WriteQ $a;RefreshQ}});$DeleteBtn.Add_Click({$t=$Queue.SelectedItem;if($t){WriteQ @(ReadQ|?{$_.id-ne$t.id});ClearForm;RefreshQ}});$UpBtn.Add_Click({MoveTask -1});$DownBtn.Add_Click({MoveTask 1})

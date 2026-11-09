@@ -17,6 +17,7 @@ import urllib.request
 import uuid
 
 from asset_pipeline import ROOT, contained, read_json, task_lock, write_json
+from studio_projects import project_config
 
 BACKENDS = {"ollama", "copilot-local", "copilot-github", "pinokio"}
 PROTECTED = {"tasks", "results", "logs", "state"}
@@ -78,6 +79,9 @@ def validate(task, config):
         raise ValueError("attachments must be an array of paths")
     payload = {"source": source, "backend": backend, "role": role, "kind": task.get("kind", "task"),
                "repository": config["repository"], "base": config["base_branch"]}
+    if task.get('projectId'):
+        source['projectId'] = task['projectId']
+        payload['validation_commands'] = config['validation_commands']
     signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return directory, role, source, signature
 
@@ -123,6 +127,8 @@ def normalize_plan(value, parent, source, roles, default_code_backend='copilot-l
             if not isinstance(step.get('toolCapability'),str) or not isinstance(step.get('toolOperation'),str) or not isinstance(step.get('toolParameters',{}),dict):
                 raise ValueError('Pinokio plan task requires capability, operation and parameter object')
             rows[-1].update(toolCapability=step['toolCapability'],toolOperation=step['toolOperation'],toolParameters=step.get('toolParameters',{}),toolAppId=step.get('toolAppId',''))
+        if source.get('projectId'):
+            rows[-1]['projectId'] = source['projectId']
     resolved = set()
     while len(resolved) < len(graph):
         ready = {key for key, deps in graph.items() if set(deps) <= resolved}
@@ -134,8 +140,8 @@ def normalize_plan(value, parent, source, roles, default_code_backend='copilot-l
 
 class Bridge:
     def __init__(self, task, config, runner=subprocess.run, http=None):
-        self.task, self.config, self.runner = task, config, runner
-        self.directory, self.role, self.source, self.signature = validate(task, config)
+        self.task, self.config, self.runner = task, project_config(task, config), runner
+        self.directory, self.role, self.source, self.signature = validate(task, self.config)
         self.path = self.directory / "bridge"
         self.receipt_path = self.path / "receipt.json"
         self.http = http or self.request_llm
@@ -176,6 +182,8 @@ class Bridge:
             "Read and obey AGENTS.md. Preserve unrelated work. Do not modify tasks/, results/, logs/ or state/. "
             "Never merge or force-push. Work only on this task. Return changes through a pull request. "
             "Local Blender/Unreal execution evidence is collected separately by the studio runner.\n")
+        if self.task.get('projectId'):
+            prompt += ('\nSelected project: ' + self.task['projectId'] + '\nTarget repository: ' + self.config['repository'] + '\nBase branch: ' + self.config['base_branch'] + '\n')
         if self.source["attachments"]:
             prompt += "Reference paths (do not claim to have read unavailable files):\n" + json.dumps(self.source["attachments"]) + "\n"
             if self.task['backend'] == 'copilot-github':
@@ -501,7 +509,8 @@ def main():
     try:
         bridge = Bridge(read_json(args.task), read_json(args.config))
         result = {"taskId": bridge.task["id"], "backend": bridge.task["backend"], "role": bridge.role,
-                  "directory": str(bridge.directory)} if args.plan else (bridge.verify_review() if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
+                  "directory": str(bridge.directory), "projectId": bridge.task.get('projectId', ''),
+                  "repository": bridge.config['repository'], "base_branch": bridge.config['base_branch']} if args.plan else (bridge.verify_review() if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
         print(json.dumps(result))
         return 0
     except Exception as error:

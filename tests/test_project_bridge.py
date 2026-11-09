@@ -21,7 +21,7 @@ class BridgeTests(unittest.TestCase):
     def setUp(self):
         self.temp=TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.config=json.loads((ROOT/'config/orchestrator.json').read_text())
-        self.config.update(jobs_root=self.temp.name,repository='example/studio')
+        self.config.update(jobs_root=self.temp.name,repository='example/studio',require_project=False)
         self.task=dict(id='TASK-TEST',title='Implement menu',description='Add menu code',backend='copilot-github',role='gameplay')
         self.calls=[];self.session_state='completed';self.remote_sha=SHA;self.fail_validation=False;self.changed_path='app.py';self.pr_state='MERGED'
 
