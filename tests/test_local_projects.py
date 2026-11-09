@@ -156,6 +156,20 @@ class LocalProjectsTests(unittest.TestCase):
         self.task['backend'] = 'copilot-local'
         self.assertEqual(self.bridge().config['repository'], '')
 
+    def test_no_configured_tests_is_reported_truthfully_and_requires_review(self):
+        self.project['validation_commands'] = []
+        self.save_registry()
+        bridge, result = self.generated()
+        report = json.loads((bridge.path/'validation.json').read_text())
+        self.assertEqual(report['status'], 'not-configured')
+        self.assertEqual(report['checks'], [])
+        self.assertEqual(report['gitDiffChecks'], 'pass')
+        self.assertIn('INGEN AUTOMATISKE PROJEKTTESTS', result['question'])
+        self.assertNotIn('tests er bestaaet', (bridge.path/'review.md').read_text())
+        self.assertEqual((self.source/'game.py').read_text(), 'score = 0\n')
+        with self.assertRaisesRegex(ValueError, 'explicit review approval'):
+            bridge.verify_review()
+
     def test_registration_local_folder_does_not_require_github_or_git(self):
         result = subprocess.run([sys.executable, str(ROOT/'tools/studio_projects.py'), '--root', str(self.folder), 'add', 'another',
             '--name', 'Another', '--kind', 'local', '--project-path', str(self.source), '--validation-json', '[["python","tests.py"]]'], capture_output=True, text=True)

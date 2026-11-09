@@ -101,6 +101,24 @@ class ProjectsTests(unittest.TestCase):
         registry = json.loads((self.folder/'config/projects.json').read_text())
         self.assertEqual(registry['projects']['newgame']['repository'], 'example/newgame')
 
+    def test_optional_tests_accept_missing_and_blank_file_inputs(self):
+        blank = self.folder/'blank-tests.json'
+        blank.write_text('  \n')
+        for name, extra in (('missingtests', []), ('blanktests', ['--validation-file', str(blank)])):
+            result = subprocess.run([sys.executable, str(ROOT/'tools/studio_projects.py'), '--root', str(self.folder),
+                'add', name, '--name', 'Game', '--repository', 'example/game', *extra], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            registered = json.loads(result.stdout)['projects'][name]
+            self.assertEqual(registered['validation_commands'], [])
+
+    def test_invalid_test_json_has_actionable_error_and_does_not_register(self):
+        result = subprocess.run([sys.executable, str(ROOT/'tools/studio_projects.py'), '--root', str(self.folder),
+            'add', 'invalidtests', '--name', 'Game', '--repository', 'example/game', '--validation-json', 'not json'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('tomt', json.loads(result.stdout)['error'])
+        self.assertNotIn('Expecting value', result.stdout)
+        self.assertFalse((self.folder/'config/projects.json').exists())
+
     @unittest.skipUnless(shutil.which('pwsh') or shutil.which('powershell.exe'), 'PowerShell required')
     def test_cli_plan_preserves_project_and_queue_blocks_cross_project_dependencies(self):
         result = subprocess.run([sys.executable, str(ROOT/'tools/studio.py'), '--root', str(self.folder),

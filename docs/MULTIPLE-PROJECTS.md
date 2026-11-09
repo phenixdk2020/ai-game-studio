@@ -9,13 +9,13 @@ Beskriv opgaven, klik **Lav plan**, start workeren og gennemgaa planen foer
 
 - **GitHub:** registrer ejer/repository, basisgren og projektets testkommandoer.
   Repositoryet skal eksistere. Kodeagenten arbejder i et separat checkout,
-  tester aendringerne og afleverer en draft-PR. Der merges ikke automatisk;
+  koerer eventuelt konfigurerede tests og afleverer en draft-PR. Der merges ikke automatisk;
   PR'en skal vaere gennemgaaet og merged foer opgaven kan godkendes som faerdig.
 - **Lokal mappe:** vaelg en eksisterende mappe, som ogsaa gerne maa vaere tom.
   Den behoever hverken Git-repository, GitHub-remote eller GitHub-login. Studio
   kopierer kildefilerne til en separat arbejdskopi, bruger lokal Git til at
   registrere forskellene, koerer den installerede Copilot CLI og projektets
-  tests. Projektets oprindelige mappe aendres foerst ved din godkendelse.
+  eventuelt konfigurerede tests. Projektets oprindelige mappe aendres foerst ved din godkendelse.
 
 Et lokalt projekts placering betyder ikke, at modeltjenesten er offline.
 Copilot CLI bruger fortsat sin egen login-/modeltjeneste. Git er noedvendig
@@ -57,8 +57,14 @@ startes ikke automatisk endnu en betalt Copilot-session.
 
 ## Testkommandoer
 
-Hvert projekt skal have sine egne testkommandoer som JSON-argumentlister.
-Brug tests og buildkommandoer, der passer til spillets engine. Eksempel:
+Testkommandoer er valgfrie ved registrering. Et tomt felt (eller `[]`) gemmes
+som ingen konfigurerede automatiske tests. Projektet kan stadig planlaegges og
+kodes, men rapport og godkendelsesspoergsmaal markerer tydeligt, at der kun er
+koert Git/diff-kontrol. Spillets funktion er dermed ikke automatisk verificeret;
+gennemgaa og afproev resultatet manuelt foer godkendelse.
+
+Hvis projektet har tests, angives de som JSON-argumentlister. Brug tests og
+buildkommandoer, der passer til spillets engine. Eksempel:
 
 ```json
 [["python", "-m", "unittest", "discover", "-s", "tests"]]

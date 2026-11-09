@@ -12,7 +12,8 @@ Add-Type -AssemblyName System.Windows.Forms
 <TextBlock Text="GitHub-repository (ejer/navn)"/><TextBox Name="Repository" Margin="0,4,0,12"/>
 <TextBlock Text="Basisgren"/><TextBox Name="Branch" Text="main" Margin="0,4,0,12"/>
 <TextBlock Text="Lokal projektmappe (paakraevet ved lokal placering)"/><DockPanel><Button Name="BrowseFolder" DockPanel.Dock="Right" Content="Gennemse..." Margin="4"/><TextBox Name="LocalPath" Margin="0,4,0,12"/></DockPanel>
-<TextBlock Text="Testkommandoer (JSON med argumentlister)"/><TextBox Name="Tests" Height="80" AcceptsReturn="True" TextWrapping="Wrap" Margin="0,4,0,8"/>
+<TextBlock Text="Testkommandoer (valgfrit, JSON med argumentlister)"/><TextBox Name="Tests" Height="80" AcceptsReturn="True" TextWrapping="Wrap" Margin="0,4,0,8"/>
+<TextBlock Text="Du kan lade feltet staa tomt. Saa koeres ingen automatiske spiltests, og resultatet markeres tydeligt til manuel gennemgang." TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,0,0,8"/>
 <TextBlock Text="Python-eksempel: [[&quot;python&quot;,&quot;-m&quot;,&quot;unittest&quot;,&quot;discover&quot;]]. Lokale kodeaendringer laves i en separat kopi og overfoeres foerst, naar du godkender resultatet. GitHub-projekter afleverer en draft-PR." TextWrapping="Wrap" Margin="0,0,0,12"/>
 <TextBlock Name="Feedback" TextWrapping="Wrap" Foreground="#FBBF24" Margin="0,0,0,12"/>
 <Button Name="Save" Content="Registrer projekt" Padding="12,8"/>

@@ -22,7 +22,7 @@ def main(argv=None):
     add.add_argument('--repository', default='')
     add.add_argument('--base-branch', default='main')
     add.add_argument('--project-path', default='')
-    validation = add.add_mutually_exclusive_group(required=True)
+    validation = add.add_mutually_exclusive_group()
     validation.add_argument('--validation-json')
     validation.add_argument('--validation-file', type=Path)
     args = parser.parse_args(argv)
@@ -45,9 +45,13 @@ def main(argv=None):
                     raise ValueError('Local projects do not use a GitHub repository')
             if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./-]*', args.base_branch) or '..' in args.base_branch:
                 raise ValueError('Invalid base branch')
-            tests = json.loads(args.validation_file.read_text(encoding='utf-8-sig') if args.validation_file else args.validation_json)
-            if not isinstance(tests, list) or not tests or any(not isinstance(command, list) or not command or any(not isinstance(arg, str) or not arg for arg in command) for command in tests):
-                raise ValueError('Provide project test commands as a JSON array of argument arrays')
+            raw = args.validation_file.read_text(encoding='utf-8-sig') if args.validation_file else (args.validation_json or '')
+            try:
+                tests = json.loads(raw) if raw.strip() else []
+            except json.JSONDecodeError:
+                raise ValueError('Testkommandoer skal vaere JSON med argumentlister, fx [["python","-m","unittest"]]. Du kan ogsaa lade feltet staa tomt.') from None
+            if not isinstance(tests, list) or any(not isinstance(command, list) or not command or any(not isinstance(arg, str) or not arg for arg in command) for command in tests):
+                raise ValueError('Testkommandoer skal vaere en liste af argumentlister. Tomt felt betyder ingen automatiske tests.')
             if not args.name.strip():
                 raise ValueError('Project name is required')
             registry['projects'][args.id] = dict(name=args.name.strip(), kind=args.kind, repository=args.repository, base_branch=args.base_branch,

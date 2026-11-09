@@ -63,7 +63,7 @@ def validate(task, config):
         if type(config[key]) is not int or config[key] < 1:
             raise ValueError(f"Invalid {key}")
     commands = config.get("validation_commands")
-    if not isinstance(commands, list) or not commands or any(
+    if not isinstance(commands, list) or (not commands and not task.get('projectId')) or any(
         not isinstance(command, list) or not command or any(not isinstance(arg, str) or not arg for arg in command)
         for command in commands
     ):
@@ -294,7 +294,8 @@ class Bridge:
         self.save(receipt)
         self.command([git, "push", "origin", "HEAD:refs/heads/" + branch], "push", checkout)
         body = self.path / "pr-body.md"
-        body.write_text(f"Task {self.task['id']}: {self.task['description']}\n\nLocal validation passed. Studio receipt: {self.task['id']}.\n", encoding="utf-8")
+        validation_note = 'Project validation commands passed.' if self.config['validation_commands'] else 'Automated project tests are NOT configured. Only Git/diff checks ran; manual code review is required.'
+        body.write_text(f"Task {self.task['id']}: {self.task['description']}\n\n{validation_note} Studio receipt: {self.task['id']}.\n", encoding="utf-8")
         result = self.command([self.tool("github"), "pr", "create", "--repo", self.config["repository"],
             "--base", self.config["base_branch"], "--head", branch, "--draft", "--title", self.task["title"],
             "--body-file", str(body)], "create-pr", checkout)
@@ -302,6 +303,8 @@ class Bridge:
         receipt["validatedHead"] = self.command([git, "rev-parse", "HEAD"], "local-head", checkout).stdout.strip()
         receipt.update(status="AwaitingCodeReview", stage="code-review", resultPath=str(self.path / "validation.json"),
                        question="Local tests passed; review the draft PR. No merge or local installation update was performed.")
+        if not self.config['validation_commands']:
+            receipt['question'] = 'Ingen automatiske projekttests er konfigureret. Kun Git/diff-kontrol er koert. Gennemgaa PR-koden manuelt foer merge og godkendelse.'
 
     def execute_copilot(self, checkout, receipt, branch):
         receipt.update(branch=branch, stage="copilot-local", status="Running")
@@ -376,13 +379,17 @@ class Bridge:
         (self.path/'changes.patch').write_text(patch, encoding='utf-8')
         write_json(self.path/'local-review.json', dict(source=self.config['local_project_root'], before=baseline, after=after, head=head, changed=changed))
         receipt['localReviewDigest'] = digest(self.path/'local-review.json')
+        validation_note = ('Projektets testkommandoer er bestaaet.' if self.config['validation_commands'] else
+                           'INGEN AUTOMATISKE PROJEKTTESTS ER KONFIGURERET. Kun Git/diff-kontrol er koert. Koden skal gennemgaas manuelt; spillets funktion er ikke automatisk verificeret.')
         (self.path/'review.md').write_text('# Lokale kodeaendringer\n\n' + self.task['title'] +
-            '\n\nProjektets tests er bestaaet. Originalmappen er endnu ikke opdateret.\n\nAendrede filer:\n' +
+            '\n\n' + validation_note + ' Originalmappen er endnu ikke opdateret.\n\nAendrede filer:\n' +
             '\n'.join('- ' + name for name in changed) + '\n\nArbejdskopi: ' + str(checkout) +
             '\n\nDiff: ' + str(self.path/'changes.patch') + '\n\nTestresultater: ' + str(self.path/'validation.json') +
             '\n\nGennemse koden. Godkend resultat / plan overfoerer aendringerne til projektmappen med backup og konfliktkontrol.\n', encoding='utf-8')
         receipt.update(status='AwaitingCodeReview', stage='local-code-review', validatedHead=head,
                        resultPath=str(self.path/'review.md'), question='Gennemse arbejdskopi og changes.patch. Godkend resultat / plan anvender de lokale aendringer med backup; originalen er endnu ikke opdateret.')
+        if not self.config['validation_commands']:
+            receipt['question'] = validation_note + ' Godkend foerst efter manuel gennemgang af arbejdskopi og changes.patch.'
 
     def parse_url(self, text):
         urls = re.findall(r"https://github\.com/" + re.escape(self.config["repository"]) + r"/pull/[1-9][0-9]*", text)
@@ -458,7 +465,8 @@ class Bridge:
         if before != after or untracked != new_after or head != self.command([git, "rev-parse", "HEAD"], "after-head", checkout).stdout.strip():
             raise ValueError("Validation modified the submitted code; review and validate again")
         write_json(self.path / "validation.json", {"schemaVersion": 1, "taskId": self.task["id"],
-            "status": "pass", "head": head, "checkout": str(checkout), "checks": checks, "completedAt": now().isoformat()})
+            "status": "pass" if checks else "not-configured", "head": head, "checkout": str(checkout), "checks": checks,
+            "gitDiffChecks": "pass", "completedAt": now().isoformat()})
 
     def github_validate(self, receipt):
         metadata = json.loads(self.command([self.tool("github"), "pr", "view", receipt["prUrl"], "--repo", self.config["repository"],
@@ -481,6 +489,8 @@ class Bridge:
         self.validate_checkout(checkout, receipt)
         receipt.update(status="AwaitingCodeReview", stage="code-review", resultPath=str(self.path / "validation.json"),
                        question="GitHub code was checked out and tested locally at the recorded SHA. Review the PR; no merge/deployment was performed.")
+        if not self.config['validation_commands']:
+            receipt['question'] = 'Ingen automatiske projekttests er konfigureret. Kun Git/diff-kontrol er koert. Gennemgaa PR-koden manuelt foer merge og godkendelse.'
 
     def verify_review(self, apply_local=False, expected_head=None):
         receipt = read_json(self.receipt_path)
