@@ -41,7 +41,7 @@ function Start-StudioUiWorker {
  RefreshQ
 }
 $planButton=New-Object Windows.Controls.Button;$planButton.Content='Lav plan';[void]$buttons.Children.Add($planButton)
-$planButton.Add_Click({Invoke-StudioUiAction {if(-not $GameProject.SelectedValue){throw 'Vaelg et spilprojekt foer du laver en plan.'};New-StudioTask -Root $Root -Title $Title.Text -Description $Description.Text -Backend ollama -Role project_manager -Kind plan -Attachments @($Attachments.Items) -ProjectPath $ProjectPath.Text -ProjectId ([string]$GameProject.SelectedValue)|Out-Null;RefreshQ}})
+$planButton.Add_Click({Invoke-StudioUiAction {if(-not $GameProject.SelectedValue){throw 'Vaelg et spilprojekt foer du laver en plan.'};if([string]::IsNullOrWhiteSpace($Title.Text)){$candidate=([string]$Description.Text).Trim();if(-not $candidate){throw 'Beskriv spillet foer du laver en plan.'};$Title.Text=$candidate.Substring(0,[Math]::Min(85,$candidate.Length))};if([string]::IsNullOrWhiteSpace($Description.Text)){$Description.Text=$Title.Text};New-StudioTask -Root $Root -Title $Title.Text -Description $Description.Text -Backend ollama -Role project_manager -Kind plan -Attachments @($Attachments.Items) -ProjectPath $ProjectPath.Text -ProjectId ([string]$GameProject.SelectedValue)|Out-Null;RefreshQ}})
 $approveButton=New-Object Windows.Controls.Button;$approveButton.Content='Godkend resultat / plan';[void]$buttons.Children.Add($approveButton)
 $approveButton.Add_Click({Invoke-StudioUiAction {if(!$Queue.SelectedItem){throw 'Vælg en opgave.'};Approve-StudioResult -Root $Root -Id $Queue.SelectedItem.id;RefreshQ}})
 $prButton=New-Object Windows.Controls.Button;$prButton.Content='Åbn PR';[void]$buttons.Children.Add($prButton)
