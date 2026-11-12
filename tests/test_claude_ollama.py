@@ -100,10 +100,28 @@ class ClaudeOllamaTests(unittest.TestCase):
             self.assertEqual(selector.fallback(need, {v['backend'] for v in available}, preference), 'claude-ollama')
 
     def test_new_backend_requires_a_registered_project(self):
-        fixture, _ = self.setup_bridge()
+        fixture, initial_bridge = self.setup_bridge()
         fixture.task.pop('projectId')
         with self.assertRaisesRegex(ValueError, 'Select a registered project'):
             Bridge(fixture.task, fixture.config)
+
+    def test_reference_documents_are_readable_but_never_applied_to_game(self):
+        fixture, _ = self.setup_bridge()
+        reference=fixture.folder/'design.md'
+        reference.write_text('# Score design\nAdd points to the score.\n')
+        fixture.task['attachments']=[str(reference)]
+        bridge = Bridge(fixture.task, fixture.config, runner=initial_bridge.runner)
+        bridge.tool=lambda name: 'fake-claude' if name=='claude' else __import__('shutil').which(name)
+        result=self.run_bridge(bridge)
+        self.assertEqual(result['status'],'AwaitingCodeReview',result)
+        refs=json.loads((bridge.path/'claude-references.json').read_text())
+        receipt=json.loads(bridge.receipt_path.read_text())
+        copy=Path(receipt['checkout'])/refs[0]['copy']
+        self.assertEqual(copy.read_bytes(),reference.read_bytes())
+        self.assertIn(refs[0]['copy'],self.claude_calls[0][1]['input'])
+        review=json.loads((bridge.path/'local-review.json').read_text())
+        self.assertEqual(review['changed'],['game.py'])
+        self.assertFalse(any('.studio-references' in p for p in review['after']))
 
 
 if __name__ == '__main__':

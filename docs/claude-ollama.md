@@ -32,6 +32,11 @@ Lokale projekter afleverer diff, testresultat og review til manuel godkendelse;
 originalmappen ændres først ved godkendelse. GitHub-projekter bruger en separat
 checkout og afleverer draft-PR gennem Studio. Modellen publicerer ikke selv.
 
+Vedhæftede Markdown-/tekstfiler kopieres ind i arbejdskopien som designreferencer
+(højst 5 MB samlet). De oprindelige referencefiler ændres ikke. Kopierne udelukkes
+fra Git-diff og overførsel til spilprojektet; originalsti og SHA256 gemmes som evidens.
+Manglende vedhæftede tekstfiler blokerer udførsel, indtil de er rettet.
+
 Session-ID, model og endpoint gemmes i receipt før udførsel. Ved timeout eller
 uklart svar bliver opgaven `NeedsInput`; den sendes ikke automatisk igen.
 Efter manuel kontrol kan eksisterende ændringer genvalideres. Ændret model,
