@@ -106,7 +106,7 @@ class ClaudeOllamaTests(unittest.TestCase):
             Bridge(fixture.task, fixture.config)
 
     def test_reference_documents_are_readable_but_never_applied_to_game(self):
-        fixture, _ = self.setup_bridge()
+        fixture, initial_bridge = self.setup_bridge()
         reference=fixture.folder/'design.md'
         reference.write_text('# Score design\nAdd points to the score.\n')
         fixture.task['attachments']=[str(reference)]
