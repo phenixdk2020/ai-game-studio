@@ -149,6 +149,43 @@ class LocalProjectsTests(unittest.TestCase):
         self.assertEqual(sum(args[0] == 'fake-copilot' for args in self.calls), count)
         self.assertEqual((self.source/'game.py').read_text(), 'score = 0\n')
 
+    def test_rejected_removed_flag_can_retry_same_snapshot_without_duplicate_session(self):
+        bridge = self.bridge()
+        runner = bridge.runner
+        rejected = False
+        def reject_first(args, **kwargs):
+            nonlocal rejected
+            if args[0] == 'fake-copilot' and not rejected:
+                rejected = True
+                return SimpleNamespace(returncode=2, stdout='', stderr='error: --no-remote was removed. Use /remote off in a session.')
+            return runner(args, **kwargs)
+        bridge.runner = reject_first
+        self.assertEqual(bridge.advance(True)['status'], 'NeedsInput')
+        before = json.loads(bridge.receipt_path.read_text())
+        self.assertTrue(bridge.rejected_cli_start(before))
+        self.assertEqual(bridge.advance(True)['status'], 'AwaitingCodeReview')
+        after = json.loads(bridge.receipt_path.read_text())
+        self.assertEqual(before['checkout'], after['checkout'])
+        self.assertEqual(before['snapshotHead'], after['snapshotHead'])
+        self.assertIn('--no-remote was removed', after['cliStartRecovery']['reason'])
+        count = sum(args[0] == 'fake-copilot' for args in self.calls)
+        bridge.advance(True)
+        self.assertEqual(sum(args[0] == 'fake-copilot' for args in self.calls), count)
+        self.assertEqual((self.source/'game.py').read_text(), 'score = 0\n')
+
+    def test_non_parser_cli_failure_never_automatically_retries(self):
+        bridge = self.bridge()
+        runner = bridge.runner
+        def fail(args, **kwargs):
+            if args[0] == 'fake-copilot':
+                return SimpleNamespace(returncode=1, stdout='', stderr='network connection lost')
+            return runner(args, **kwargs)
+        bridge.runner = fail
+        self.assertEqual(bridge.advance(True)['status'], 'NeedsInput')
+        with patch.object(bridge, 'execute_copilot') as execute:
+            self.assertEqual(bridge.advance(True)['status'], 'NeedsInput')
+            execute.assert_not_called()
+
     def test_local_project_rejects_cloud_backend_and_accepts_no_repository(self):
         self.task['backend'] = 'copilot-github'
         with self.assertRaisesRegex(ValueError, 'requires copilot-local'):

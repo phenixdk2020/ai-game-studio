@@ -11,6 +11,34 @@
   "git_executable": "git",
   "command_timeout": 1800,
   "poll_seconds": 30,
-  "validation_commands": [["python", "-m", "unittest", "discover", "-s", "tests", "-v"]],
-  "roles": ["project_manager", "historical_research", "technical_research", "character3d", "rigging", "animation", "gameplay", "unreal", "qa", "integration", "environment", "art_world"]
+  "validation_commands": [
+    [
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-v"
+    ]
+  ],
+  "roles": [
+    "project_manager",
+    "historical_research",
+    "technical_research",
+    "character3d",
+    "rigging",
+    "animation",
+    "gameplay",
+    "unreal",
+    "qa",
+    "integration",
+    "environment",
+    "art_world"
+  ],
+  "claude_executable": "claude",
+  "claude_ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen3.6:35b-a3b-coding"
+  }
 }

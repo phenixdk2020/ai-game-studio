@@ -3,7 +3,7 @@
 function New-StudioTask {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$Title,
           [Parameter(Mandatory)][string]$Description,
-          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','pinokio')][string]$Backend='auto',
+          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','claude-ollama','pinokio')][string]$Backend='auto',
           [string]$Role='project_manager', [string[]]$Attachments=@(), [string]$ProjectPath='', [string]$ProjectId='',
           [string[]]$Dependencies=@(), [ValidateSet('task','plan')][string]$Kind='task',
           [string]$ToolCapability='', [string]$ToolOperation='', $ToolParameters=@{}, [string]$ToolAppId='')
@@ -36,7 +36,7 @@ function Get-StudioBackend {
         $settings=Get-Content -LiteralPath $configPath -Raw -Encoding UTF8|ConvertFrom-Json
         if($settings.PSObject.Properties.Name -contains 'default_code_backend'){$codeBackend=[string]$settings.default_code_backend}
     }
-    if($codeBackend -notin @('copilot-local','copilot-github')){throw 'Invalid default_code_backend.'}
+    if($codeBackend -notin @('copilot-local','copilot-github','claude-ollama')){throw 'Invalid default_code_backend.'}
     if($Task.role -in @('gameplay','integration','gameplay-ai-agent','integration-agent','hud-ui-agent')){return $codeBackend}
     $text = "$($Task.title) $($Task.description)"
     if ($text -match '(?i)3d|mesh|sword|character|prop|sv.rd|model af|blender') { return 'asset3d' }
@@ -111,7 +111,7 @@ function Approve-StudioResult {
         $ids = @($children | ForEach-Object id)
         foreach ($child in $children) {
             if ([string]$child.projectId -ne [string]$task.projectId) { throw 'Plan cannot change the selected project.' }
-            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github','pinokio') -or
+            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github','claude-ollama','pinokio') -or
                 @($child.dependencies | Where-Object { $_ -notin $ids }).Count) { throw 'Invalid child task.' }
         }
         $resolved = @()

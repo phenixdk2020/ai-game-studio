@@ -9,7 +9,7 @@ def project_config(task, config):
     effective = copy.deepcopy(config)
     project_id = task.get('projectId', '')
     if not project_id:
-        if config.get('require_project') and (task.get('backend') in {'copilot-local', 'copilot-github'} or task.get('kind') == 'plan'):
+        if config.get('require_project') and (task.get('backend') in {'copilot-local', 'copilot-github', 'claude-ollama'} or task.get('kind') == 'plan'):
             raise ValueError('Select a registered project before planning or coding; no Studio repository fallback is allowed')
         return effective
     if not isinstance(project_id, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', project_id):

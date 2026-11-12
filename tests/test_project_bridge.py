@@ -126,7 +126,7 @@ class BridgeTests(unittest.TestCase):
         result=self.bridge().advance(True)
         self.assertEqual(result['status'],'AwaitingCodeReview')
         copilot=next(call for call in self.calls if call[0]=='copilot')
-        self.assertIn('--no-remote',copilot);self.assertIn('--deny-tool=shell(git push)',copilot)
+        self.assertNotIn('--no-remote',copilot);self.assertIn('--deny-tool=shell(git push)',copilot)
         self.assertIn('--trust-folder',copilot);self.assertIn('--name',copilot)
         self.assertNotIn('--session-id',copilot)
         self.assertIn('--draft',next(call for call in self.calls if call[1:3]==['pr','create']))

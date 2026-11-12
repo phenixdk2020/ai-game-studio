@@ -20,7 +20,7 @@ def main(argv=None):
         command = commands.add_parser(action)
         command.add_argument('title')
         command.add_argument('--description', default='')
-        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github','pinokio'), default='auto')
+        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github','claude-ollama','pinokio'), default='auto')
         command.add_argument('--tool',default='')
         command.add_argument('--operation',default='')
         command.add_argument('--parameters-json',default='{}')

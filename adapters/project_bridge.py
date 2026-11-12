@@ -19,12 +19,12 @@ import uuid
 from asset_pipeline import ROOT, contained, read_json, task_lock, write_json
 from studio_projects import project_config
 
-BACKENDS = {"ollama", "copilot-local", "copilot-github", "pinokio"}
+BACKENDS = {"ollama", "copilot-local", "copilot-github", "claude-ollama", "pinokio"}
 PROTECTED = {"tasks", "results", "logs", "state"}
 
 def code_backend(config):
     value=config.get('default_code_backend','copilot-local')
-    if value not in {'copilot-local','copilot-github'}:raise ValueError('Invalid default_code_backend')
+    if value not in {'copilot-local','copilot-github','claude-ollama'}:raise ValueError('Invalid default_code_backend')
     return value
 
 
@@ -84,6 +84,9 @@ def validate(task, config):
         payload['validation_commands'] = config['validation_commands']
     if config.get('project_kind') == 'local':
         payload['local_project_root'] = config['local_project_root']
+    if backend == 'claude-ollama':
+        from claude_ollama import settings
+        payload['claude_ollama'] = settings(config)
     signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     return directory, role, source, signature
 
@@ -96,7 +99,7 @@ def pr_number(url, repository):
 
 
 def normalize_plan(value, parent, source, roles, default_code_backend='copilot-local'):
-    if default_code_backend not in {'copilot-local','copilot-github'}:raise ValueError('Invalid default_code_backend')
+    if default_code_backend not in {'copilot-local','copilot-github','claude-ollama'}:raise ValueError('Invalid default_code_backend')
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("```json") and text.endswith("```"):
@@ -122,7 +125,7 @@ def normalize_plan(value, parent, source, roles, default_code_backend='copilot-l
         graph[step["key"]] = deps
         rows.append({"schemaVersion": 1, "id": mapping[step["key"]], "parentId": parent,
             "title": step["title"], "description": step["description"], "role": step["role"],
-            "agent": step["role"], "backend": default_code_backend if step['backend'] in {'copilot-local','copilot-github'} else step['backend'], "kind": "task", "status": "Queued",
+            "agent": step["role"], "backend": default_code_backend if step['backend'] in {'copilot-local','copilot-github','claude-ollama'} else step['backend'], "kind": "task", "status": "Queued",
             "dependencies": [mapping[key] for key in deps], "attachments": source["attachments"],
             "projectPath": source["projectPath"], "createdAt": now().isoformat(), "priority": 10})
         if step['backend']=='pinokio':
@@ -155,10 +158,11 @@ class Bridge:
             raise ValueError(f"Executable not found: {value}")
         return found
 
-    def command(self, args, label, cwd=None, timeout=None, check=True):
+    def command(self, args, label, cwd=None, timeout=None, check=True, extra_env=None, input_text=None):
+        options = {} if input_text is None else {"input": input_text}
         result = self.runner(args, cwd=str(cwd or ROOT), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout or self.config["command_timeout"],
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "PYTHONDONTWRITEBYTECODE": "1", **(extra_env or {})}, **options)
         (self.path / (label + ".stdout.txt")).write_text(result.stdout or "", encoding="utf-8")
         (self.path / (label + ".stderr.txt")).write_text(result.stderr or "", encoding="utf-8")
         if check and result.returncode:
@@ -227,7 +231,7 @@ class Bridge:
             raise ValueError("Empty model result")
         if planning:
             plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"],
-                                  'copilot-local' if self.config.get('project_kind') == 'local' else code_backend(self.config))
+                                  'copilot-local' if self.config.get('project_kind') == 'local' and code_backend(self.config) == 'copilot-github' else code_backend(self.config))
             target = self.path / "plan.json"
             write_json(target, plan)
         else:
@@ -307,13 +311,17 @@ class Bridge:
             receipt['question'] = 'Ingen automatiske projekttests er konfigureret. Kun Git/diff-kontrol er koert. Gennemgaa PR-koden manuelt foer merge og godkendelse.'
 
     def execute_copilot(self, checkout, receipt, branch):
+        if self.task["backend"] == "claude-ollama":
+            from claude_ollama import execute
+            return execute(self, checkout, receipt, branch)
         receipt.update(branch=branch, stage="copilot-local", status="Running")
         self.save(receipt)  # A crash after this point must not start another coding session.
         session = str(uuid.uuid4())
         receipt["sessionName"] = session
         self.save(receipt)
+        # Copilot CLI 1.0.106 fjernede --no-remote (fjernsessioner er nu opt-in via --connect/remote).
         execution = self.command([self.tool("copilot"), "-C", str(checkout), "--trust-folder", "--name", session,
-            "--no-auto-update", "--disable-builtin-mcps", "--no-remote", "--no-ask-user", "--allow-all-tools",
+            "--no-auto-update", "--disable-builtin-mcps", "--no-ask-user", "--allow-all-tools",
             "--deny-tool=shell(git push)", "--deny-tool=shell(gh pr create)", "--output-format=json",
             "--log-dir", str(self.path / "copilot-logs"), "-p", self.prompt()], "copilot", checkout)
         for line in execution.stdout.splitlines():
@@ -343,14 +351,48 @@ class Bridge:
         self.local_commit(checkout, 'Local project snapshot', 'snapshot-commit', allow_empty=True)
         head = self.command([git, 'rev-parse', 'HEAD'], 'snapshot-head', checkout).stdout.strip()
         self.command([git, 'update-ref', 'refs/remotes/origin/' + self.config['base_branch'], head], 'snapshot-reference', checkout)
-        receipt['snapshotHead'] = head
+        receipt.update(snapshotHead=head, branch=branch)
         self.save(receipt)
-        self.execute_copilot(checkout, receipt, branch)
+        self.continue_local_folder_copilot(receipt)
+
+    def continue_local_folder_copilot(self, receipt):
+        checkout = Path(receipt['checkout'])
+        git = self.tool('git')
+        self.execute_copilot(checkout, receipt, receipt['branch'])
         changed = self.command([git, 'status', '--porcelain', '--untracked-files=all'], 'local-status', checkout).stdout
         if changed.strip():
             self.command([git, 'add', '--all'], 'stage', checkout)
             self.local_commit(checkout, self.task['id'] + ': ' + self.task['title'], 'commit')
         self.finish_local_review(checkout, receipt)
+
+    def rejected_cli_start(self, receipt):
+        """Only a proven parser rejection can be retried without reconciling a session."""
+        if (self.config.get('project_kind') != 'local' or receipt.get('stage') != 'copilot-local'
+                or receipt.get('status') not in {'Running', 'NeedsInput', 'Failed'}
+                or receipt.get('sessionId') or receipt.get('cliStartRecovery')
+                or (self.path/'copilot-logs').exists()):
+            return False
+        stdout, stderr = self.path/'copilot.stdout.txt', self.path/'copilot.stderr.txt'
+        return (stdout.is_file() and stdout.stat().st_size == 0 and stderr.is_file()
+                and stderr.read_text(encoding='utf-8').strip().startswith('error: --no-remote was removed.'))
+
+    def retry_rejected_cli_start(self, receipt):
+        from local_project import digest, manifest
+        checkout = contained(receipt['checkout'], self.path)
+        if not (checkout/'.git').is_dir() or not receipt.get('snapshotHead'):
+            raise ValueError('No intact local snapshot for CLI-start recovery')
+        head = self.command([self.tool('git'), 'rev-parse', 'HEAD'], 'retry-head', checkout).stdout.strip()
+        dirty = self.command([self.tool('git'), 'status', '--porcelain', '--untracked-files=all'], 'retry-status', checkout).stdout
+        baseline_path = self.path/'local-source.json'
+        if (head != receipt['snapshotHead'] or dirty.strip()
+                or digest(baseline_path) != receipt.get('sourceManifestDigest')
+                or manifest(self.config['local_project_root']) != read_json(baseline_path)):
+            raise ValueError('Project/snapshot changed after rejected CLI start; create a fresh task')
+        receipt['cliStartRecovery'] = {'at': now().isoformat(), 'reason':
+            (self.path/'copilot.stderr.txt').read_text(encoding='utf-8')}
+        receipt.update(error='', question='')
+        self.save(receipt)  # Preserve rejection evidence before reusing stdout/stderr.
+        self.continue_local_folder_copilot(receipt)
 
     def local_commit(self, checkout, message, label, allow_empty=False):
         arguments = [self.tool('git'), '-c', 'user.name=AI Game Studio', '-c', 'user.email=local@studio.invalid', 'commit', '-m', message]
@@ -373,7 +415,7 @@ class Bridge:
         after = {name: digest(safe_path(checkout, name)) for name in names if name}
         changed = sorted(name for name in baseline.keys() | after.keys() if baseline.get(name) != after.get(name))
         if not changed:
-            raise ValueError('Copilot returned no local code changes')
+            raise ValueError(("Claude Code" if self.task["backend"] == "claude-ollama" else "Copilot") + " returned no local code changes")
         head = self.command([git, 'rev-parse', 'HEAD'], 'local-head', checkout).stdout.strip()
         patch = self.command([git, 'diff', '--binary', receipt['snapshotHead'], 'HEAD'], 'local-diff', checkout).stdout
         (self.path/'changes.patch').write_text(patch, encoding='utf-8')
@@ -549,7 +591,7 @@ class Bridge:
                 except Exception as error:receipt.update(status='NeedsInput',error=str(error))
                 self.save(receipt);return self.result(receipt)
             if revalidate or bind_session or bind_pr:
-                if not receipt or self.task['backend'] not in {'copilot-local','copilot-github'}:
+                if not receipt or self.task['backend'] not in {'copilot-local','copilot-github','claude-ollama'}:
                     raise ValueError('No existing coding receipt to reconcile')
                 if self.config.get('project_kind') == 'local':
                     if bind_session or bind_pr:
@@ -584,24 +626,27 @@ class Bridge:
                     self.save(receipt)
                     return self.result(receipt)
                 self.save(receipt)
-            if receipt and receipt["status"] in {"Prepared", "Dispatching", "Running"}:
+            retry_cli = bool(receipt and self.rejected_cli_start(receipt))
+            if receipt and receipt["status"] in {"Prepared", "Dispatching", "Running"} and not retry_cli:
                 receipt.update(status="NeedsInput", error="Interrupted external execution; reconcile existing session/checkout before resubmitting")
                 self.save(receipt)
                 return self.result(receipt)
-            if receipt and receipt["status"] != "WaitingForRemote":
+            if receipt and receipt["status"] != "WaitingForRemote" and not retry_cli:
                 return self.result(receipt)
             if not receipt:
                 receipt = {"schemaVersion": 1, "taskId": self.task["id"], "signature": self.signature,
                     "backend": self.task["backend"], "status": "Prepared", "createdAt": now().isoformat()}
                 self.save(receipt)
             try:
-                if receipt["status"] == "WaitingForRemote":
+                if retry_cli:
+                    self.retry_rejected_cli_start(receipt)
+                elif receipt["status"] == "WaitingForRemote":
                     self.github_poll(receipt)
                 elif self.task["backend"] == "ollama":
                     receipt.update(status="Running", stage="specialist")
                     self.save(receipt)
                     self.ollama(receipt)
-                elif self.task["backend"] == "copilot-local":
+                elif self.task["backend"] in {"copilot-local", "claude-ollama"}:
                     self.local_copilot(receipt)
                 elif self.task['backend']=='pinokio':
                     receipt.update(status='Running',stage='pinokio-tool');self.save(receipt)
@@ -609,7 +654,7 @@ class Bridge:
                 else:
                     self.github_start(receipt)
             except Exception as error:
-                ambiguous = receipt["status"] in {"Dispatching", "Running"} and receipt.get("stage") in {"github-dispatch", "copilot-local", "publishing"}
+                ambiguous = receipt["status"] in {"Dispatching", "Running"} and receipt.get("stage") in {"github-dispatch", "copilot-local", "claude-ollama", "publishing"}
                 receipt.update(status="NeedsInput" if ambiguous else "Failed", error=str(error),
                                question="Review the receipt and logs before retrying; no automatic redispatch occurs.")
             self.save(receipt)
