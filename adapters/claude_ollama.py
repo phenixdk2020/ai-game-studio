@@ -4,6 +4,8 @@ import hashlib
 from pathlib import Path
 import urllib.request
 import uuid
+import sys
+from asset_pipeline import ROOT
 
 
 def reference_copies(bridge, checkout, session):
@@ -48,7 +50,15 @@ def settings(config):
         raise ValueError('Claude Ollama requires a loopback Ollama URL')
     if not isinstance(model, str) or not model.strip() or ':cloud' in model.lower():
         raise ValueError('Configure a local claude_ollama.model')
-    return {'base_url': url, 'model': model}
+    capabilities=value.get('tool_capabilities',[])
+    if not isinstance(capabilities,list) or any(not isinstance(item,str) for item in capabilities):
+        raise ValueError('claude_ollama.tool_capabilities must be an array of names')
+    context=value.get('context_tokens',65536)
+    output=value.get('max_output_tokens',8192)
+    if type(context) is not int or context<16384 or type(output) is not int or not 1024<=output<=min(16384,context//4):
+        raise ValueError('Configure valid Claude context_tokens and max_output_tokens')
+    return {'base_url': url, 'model': model, 'tool_capabilities':capabilities,
+            'context_tokens':context,'max_output_tokens':output}
 
 
 def probe(config):
@@ -76,12 +86,19 @@ def execute(bridge, checkout, receipt, branch):
         'CLAUDE_CODE_USE_BEDROCK': '0', 'CLAUDE_CODE_USE_VERTEX': '0',
         'CLAUDE_CODE_USE_FOUNDRY': '0', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC': '1',
         'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1', 'DISABLE_AUTOUPDATER': '1',
+        'MCP_TOOL_TIMEOUT': '3600000',
+        'CLAUDE_CODE_MAX_CONTEXT_TOKENS':str(selected['context_tokens']),
+        'CLAUDE_CODE_MAX_OUTPUT_TOKENS':str(selected['max_output_tokens']),
     }
     settings_path = bridge.path/'claude-settings.json'
     settings_path.write_text(json.dumps({'env': environment, 'disableAllHooks': True}), encoding='utf-8')
     mcp_path = bridge.path/'claude-mcp.json'
-    mcp_path.write_text('{"mcpServers":{}}', encoding='utf-8')
     session = str(uuid.uuid4())
+    context=bridge.path/'studio-tools-context.json'
+    context.write_text(json.dumps(dict(root=str(ROOT),
+        checkout=str(checkout),session=session,parent=bridge.task,config=bridge.config)),encoding='utf-8')
+    mcp_path.write_text(json.dumps({'mcpServers':{'studio':{'type':'stdio','command':sys.executable,
+        'args':[str(Path(__file__).with_name('studio_agent_tools.py')),'--context',str(context)]}}}),encoding='utf-8')
     references = reference_copies(bridge, checkout, session)
     receipt.update(branch=branch, stage='claude-ollama', status='Running',
                    sessionId=session, model=selected['model'], endpoint=selected['base_url'])
@@ -92,19 +109,30 @@ def execute(bridge, checkout, receipt, branch):
     instructions += ('\nUse your file tools to implement the requested changes in this working directory. '
                      'You have no shell tools. Do not edit .git or agent/tool configuration. '
                      'Studio runs the configured tests after you finish. Do not claim you ran tests.\n')
+    instructions += ('\nUse the Studio MCP tools to request registered Pinokio operations for this project. '
+                     'Call studio_list_tools first. Use one stable request_key for each intended operation; '
+                     'never use a new key just because a job is still running. Wait/read status on the returned task_id. '
+                     'Do not claim generation from a request alone. Tool results awaiting visual review are provisional. '
+                     'studio_copy_artifact imports a verified result only into this isolated checkout; '
+                     'the operator still reviews results and applies changes. Never create/edit queue files yourself.\n')
+    instructions += ('Read large design files in bounded sections. Implement and write code in small files or edits, '
+                     'rather than producing the entire project in a single response. Keep the final report concise.\n')
     result = bridge.command([executable, '-p', '--model', selected['model'],
-        '--restricted', '--tools', tools, '--allowedTools', tools,
+        '--restricted', '--tools', tools, '--allowedTools', tools+',mcp__studio__*',
         '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
         '--setting-sources', '', '--settings', str(settings_path),
         '--strict-mcp-config', '--mcp-config', str(mcp_path),
         '--session-id', session, '--output-format', 'json'],
-        'claude', checkout, extra_env=environment, input_text=instructions)
+        'claude', checkout, extra_env=environment, input_text=instructions, check=False)
     try:
         response = json.loads(result.stdout)
     except ValueError as error:
         raise ValueError('Claude Code returned invalid JSON; inspect the existing session') from error
     if not isinstance(response, dict) or response.get('is_error') or response.get('subtype') != 'success':
-        raise ValueError('Claude Code did not finish successfully; inspect bridge/claude.stdout.txt')
+        detail=str(response.get('result') or response.get('api_error') or 'unknown CLI error')[:1600] if isinstance(response,dict) else 'invalid CLI result'
+        raise ValueError('Claude Code stopped: '+detail+'; existing checkout/session preserved')
+    if result.returncode:
+        raise ValueError('Claude Code exited with code '+str(result.returncode)+'; inspect the saved CLI result')
     if response.get('permission_denials'):
         raise ValueError('Claude Code reported denied tools; review the session before revalidating')
     (bridge.path/'claude-result.md').write_text(str(response.get('result', '')), encoding='utf-8')

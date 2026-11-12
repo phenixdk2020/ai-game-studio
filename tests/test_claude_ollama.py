@@ -28,6 +28,8 @@ class ClaudeOllamaTests(unittest.TestCase):
                 self.claude_calls.append((args, kwargs))
                 self.assertEqual(kwargs['env']['ANTHROPIC_BASE_URL'], 'http://127.0.0.1:11434')
                 self.assertEqual(kwargs['env']['ANTHROPIC_API_KEY'], '')
+                self.assertEqual(kwargs['env']['CLAUDE_CODE_MAX_CONTEXT_TOKENS'], '65536')
+                self.assertEqual(kwargs['env']['CLAUDE_CODE_MAX_OUTPUT_TOKENS'], '8192')
                 self.assertIn('Implement a score counter', kwargs['input'])
                 if mode == 'timeout':
                     raise subprocess.TimeoutExpired(args, 1)
@@ -35,6 +37,9 @@ class ClaudeOllamaTests(unittest.TestCase):
                     (Path(kwargs['cwd'])/'game.py').write_text('score = 1\n')
                 data=dict(subtype='success', is_error=False, result='Edited file.', permission_denials=[])
                 if mode == 'denied': data['permission_denials']=[{'tool_name':'Bash'}]
+                if mode == 'output-limit':
+                    data.update(is_error=True,result='API Error: response exceeded output token maximum')
+                    return SimpleNamespace(returncode=1, stdout=json.dumps(data), stderr='unrecognized model')
                 return SimpleNamespace(returncode=0, stdout=json.dumps(data), stderr='')
             return fixture.runner(args, **kwargs)
         bridge = Bridge(fixture.task, fixture.config, runner=runner)
@@ -72,6 +77,14 @@ class ClaudeOllamaTests(unittest.TestCase):
         result = self.run_bridge(bridge)
         self.assertEqual(result['status'], 'NeedsInput', result)
         self.assertIn('denied tools', result['error'])
+
+    def test_cli_failure_surfaces_the_structured_error_without_redispatch(self):
+        _,bridge=self.setup_bridge('output-limit')
+        result=self.run_bridge(bridge)
+        self.assertEqual(result['status'],'NeedsInput',result)
+        self.assertIn('output token maximum',result['error'])
+        self.run_bridge(bridge)
+        self.assertEqual(len(self.claude_calls),1)
 
     def test_configuration_rejects_cloud_and_external_server(self):
         for value in [dict(base_url='https://example.com',model='code'),

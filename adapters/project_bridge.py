@@ -538,6 +538,9 @@ class Bridge:
         receipt = read_json(self.receipt_path)
         if receipt.get('signature') != self.signature or receipt.get('status') != 'AwaitingCodeReview':
             raise ValueError('No current validated code result')
+        if self.task['backend']=='claude-ollama':
+            from studio_agent_tools import verify_tool_reviews
+            verify_tool_reviews(self)
         if self.config.get('project_kind') == 'local':
             from local_project import apply_review, digest, manifest
             if expected_head is not None and expected_head != receipt.get('validatedHead'):

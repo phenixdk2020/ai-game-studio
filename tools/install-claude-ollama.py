@@ -21,9 +21,12 @@ def main():
         raise ValueError('Claude Code executable not found')
     config = json.loads((target/'config/orchestrator.json').read_text(encoding='utf-8-sig'))
     config.update(claude_executable=args.claude,
-                  claude_ollama={'base_url':'http://127.0.0.1:11434','model':args.model})
+                  claude_ollama={'base_url':'http://127.0.0.1:11434','model':args.model,
+                                 'tool_capabilities':['image_generation','image_to_3d','animation'],
+                                 'context_tokens':65536,'max_output_tokens':8192})
     backup = Path(os.environ.get('LOCALAPPDATA', Path.home()))/'AI-Game-Studio/backups'/('claude-ollama-'+datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
-    copied = ['adapters/claude_ollama.py','adapters/project_bridge.py',
+    copied = ['adapters/claude_ollama.py','adapters/project_bridge.py','adapters/studio_agent_tools.py',
+              'adapters/Studio.AgentTools.Queue.ps1',
               'adapters/studio_projects.py','tools/agent_selector_v192.py','docs/claude-ollama.md']
     patched = ['adapters/Studio.Orchestrator.psm1','adapters/Studio.Gui.ps1','tools/studio.py']
     for rel in copied + patched + ['config/orchestrator.json']:
