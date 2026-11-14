@@ -1,18 +1,22 @@
-Import-Module (Join-Path $PSScriptRoot 'Studio.Queue.psm1')
+﻿Import-Module (Join-Path $PSScriptRoot 'Studio.Queue.psm1')
 
 function New-StudioTask {
     param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][string]$Title,
           [Parameter(Mandatory)][string]$Description,
-          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','pinokio')][string]$Backend='auto',
-          [string]$Role='project_manager', [string[]]$Attachments=@(), [string]$ProjectPath='',
+          [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','claude-ollama','pinokio')][string]$Backend='auto',
+          [string]$Role='project_manager', [string[]]$Attachments=@(), [string]$ProjectPath='', [string]$ProjectId='',
           [string[]]$Dependencies=@(), [ValidateSet('task','plan')][string]$Kind='task',
           [string]$ToolCapability='', [string]$ToolOperation='', $ToolParameters=@{}, [string]$ToolAppId='')
     $path = Join-Path $Root 'tasks/queue.gui.json'
     $snapshot = Get-StudioQueueSnapshot -Path $path
+    foreach($dependency in $Dependencies){
+        $parent=@($snapshot.Tasks | Where-Object id -eq $dependency)
+        if($parent.Count -ne 1 -or [string]$parent[0].projectId -ne $ProjectId){throw 'Dependencies must belong to the same project.'}
+    }
     $task = [pscustomobject]@{
         schemaVersion=1; id=('TASK-'+[guid]::NewGuid().ToString('N').Substring(0,20).ToUpper())
         title=$Title; description=$Description; backend=$Backend; role=$Role; agent=$Role
-        attachments=@($Attachments); projectPath=$ProjectPath; dependencies=@($Dependencies)
+        attachments=@($Attachments); projectPath=$ProjectPath; projectId=$ProjectId; dependencies=@($Dependencies)
         kind=$Kind; status='Queued'; priority=10; createdAt=[DateTime]::UtcNow.ToString('o')
         toolCapability=$ToolCapability;toolOperation=$ToolOperation;toolParameters=$ToolParameters;toolAppId=$ToolAppId
     }
@@ -32,7 +36,7 @@ function Get-StudioBackend {
         $settings=Get-Content -LiteralPath $configPath -Raw -Encoding UTF8|ConvertFrom-Json
         if($settings.PSObject.Properties.Name -contains 'default_code_backend'){$codeBackend=[string]$settings.default_code_backend}
     }
-    if($codeBackend -notin @('copilot-local','copilot-github')){throw 'Invalid default_code_backend.'}
+    if($codeBackend -notin @('copilot-local','copilot-github','claude-ollama')){throw 'Invalid default_code_backend.'}
     if($Task.role -in @('gameplay','integration','gameplay-ai-agent','integration-agent','hud-ui-agent')){return $codeBackend}
     $text = "$($Task.title) $($Task.description)"
     if ($text -match '(?i)3d|mesh|sword|character|prop|sv.rd|model af|blender') { return 'asset3d' }
@@ -44,10 +48,12 @@ function Get-StudioReadyTask {
     param([array]$Tasks, [switch]$ProcessAssets, [switch]$ApproveUnrealWrite,
           [switch]$ValidateUnreal, [switch]$CaptureUnrealPreview)
     $statuses = @{}
-    foreach ($task in $Tasks) { $statuses[$task.id] = $task.status }
+    $projects = @{}
+    foreach ($task in $Tasks) { $statuses[$task.id] = $task.status; $projects[$task.id]=[string]$task.projectId }
     $ready = foreach ($task in $Tasks) {
         $waiting = @(@($task.dependencies) | Where-Object { $_ -and $statuses[$_] -ne 'Completed' })
         if ($waiting.Count) { continue }
+        if (@(@($task.dependencies) | Where-Object { $_ -and $projects[$_] -ne [string]$task.projectId }).Count) { continue }
         if ($task.status -eq 'WaitingForRemote' -and $task.nextPollAt) {
             $due = [DateTimeOffset]::MinValue
             if ([DateTimeOffset]::TryParse([string]$task.nextPollAt, [ref]$due) -and $due -gt [DateTimeOffset]::UtcNow) { continue }
@@ -72,20 +78,21 @@ function Approve-StudioResult {
     if ($task.backend -eq 'pinokio' -and $task.status -eq 'AwaitingVisualReview') {
         $taskFile=Join-Path $Root "data/pipeline-jobs/$Id/bridge-task.json"
         $original=Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8|ConvertFrom-Json
-        foreach($name in @('title','description','backend','role','attachments','projectPath','toolCapability','toolOperation','toolAppId','toolParameters')) {
+        foreach($name in @('title','description','backend','role','attachments','projectPath','projectId','toolCapability','toolOperation','toolAppId','toolParameters')) {
             if ((ConvertTo-Json -InputObject $original.$name -Depth 40 -Compress) -ne (ConvertTo-Json -InputObject $task.$name -Depth 40 -Compress)) { throw 'Tool task inputs changed after execution; create a new task.' }
         }
     }
     if ($task.status -eq 'AwaitingCodeReview') {
         $taskFile=Join-Path $Root "data/pipeline-jobs/$Id/bridge-task.json"
-        $response=& python (Join-Path $PSScriptRoot 'project_bridge.py') $taskFile --config (Join-Path $Root 'config/orchestrator.json') --verify-review
+        $original=Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8|ConvertFrom-Json
+        foreach($name in @('title','description','backend','role','attachments','projectPath','projectId')) {
+            if ((ConvertTo-Json -InputObject $original.$name -Depth 40 -Compress) -ne (ConvertTo-Json -InputObject $task.$name -Depth 40 -Compress)) { throw 'Task changed since validation.' }
+        }
+        $response=& python (Join-Path $PSScriptRoot 'project_bridge.py') $taskFile --config (Join-Path $Root 'config/orchestrator.json') --verify-review --apply-local --expected-head $task.validatedHead
         if ($LASTEXITCODE -ne 0) { throw ($response -join "`n") }
         $verified=($response -join "`n")|ConvertFrom-Json
         if ($verified.validatedHead -ne $task.validatedHead) { throw 'Validated head changed.' }
-        $original=Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8|ConvertFrom-Json
-        foreach($name in @('title','description','backend','role','attachments','projectPath')) {
-            if ((ConvertTo-Json -InputObject $original.$name -Depth 40 -Compress) -ne (ConvertTo-Json -InputObject $task.$name -Depth 40 -Compress)) { throw 'Task changed since validation.' }
-        }
+        if($verified.localApplied){$task | Add-Member -NotePropertyName question -NotePropertyValue 'Lokale kodeaendringer er anvendt med backup.' -Force}
     }
     if ($task.status -eq 'AwaitingPlanReview') {
         $jobsRoot='data/pipeline-jobs'
@@ -100,9 +107,11 @@ function Approve-StudioResult {
                 (ConvertTo-Json -InputObject $plan.source.$name -Depth 40 -Compress)) { throw 'Task inputs changed after planning.' }
         }
         $children = @(ConvertTo-StudioTasks -Value $plan.tasks)
+        if([string]$task.projectId -ne [string]$plan.source.projectId){throw 'Selected project changed after planning.'}
         $ids = @($children | ForEach-Object id)
         foreach ($child in $children) {
-            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github','pinokio') -or
+            if ([string]$child.projectId -ne [string]$task.projectId) { throw 'Plan cannot change the selected project.' }
+            if ($child.parentId -ne $Id -or $child.status -ne 'Queued' -or $child.backend -notin @('ollama','asset3d','copilot-local','copilot-github','claude-ollama','pinokio') -or
                 @($child.dependencies | Where-Object { $_ -notin $ids }).Count) { throw 'Invalid child task.' }
         }
         $resolved = @()
