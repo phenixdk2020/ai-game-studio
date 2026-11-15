@@ -74,7 +74,9 @@ def probe(config):
     return selected
 
 
-def execute(bridge, checkout, receipt, branch):
+def execute(bridge, checkout, receipt, branch, resume_message=None, request_id=None):
+    from task_chat import for_bridge
+    chat = for_bridge(bridge)
     selected = probe(bridge.config)  # Failure before dispatch is safe to correct.
     executable = bridge.tool('claude')
     help_result = bridge.command([executable, '--help'], 'claude-help', checkout)
@@ -91,15 +93,24 @@ def execute(bridge, checkout, receipt, branch):
         'CLAUDE_CODE_MAX_OUTPUT_TOKENS':str(selected['max_output_tokens']),
     }
     settings_path = bridge.path/'claude-settings.json'
+    (bridge.path/'claude-config').mkdir(exist_ok=True)
     settings_path.write_text(json.dumps({'env': environment, 'disableAllHooks': True}), encoding='utf-8')
     mcp_path = bridge.path/'claude-mcp.json'
-    session = str(uuid.uuid4())
+    resuming = resume_message is not None
+    session = receipt.get('sessionId') if resuming else str(uuid.uuid4())
+    if resuming and (not session or not context_exists(bridge)):
+        raise ValueError('The saved Claude session/MCP configuration is missing; reconcile it before continuing')
     context=bridge.path/'studio-tools-context.json'
-    context.write_text(json.dumps(dict(root=str(ROOT),
-        checkout=str(checkout),session=session,parent=bridge.task,config=bridge.config)),encoding='utf-8')
-    mcp_path.write_text(json.dumps({'mcpServers':{'studio':{'type':'stdio','command':sys.executable,
-        'args':[str(Path(__file__).with_name('studio_agent_tools.py')),'--context',str(context)]}}}),encoding='utf-8')
-    references = reference_copies(bridge, checkout, session)
+    if not resuming:
+        context.write_text(json.dumps(dict(root=str(ROOT),
+            checkout=str(checkout),session=session,parent=bridge.task,config=bridge.config)),encoding='utf-8')
+        mcp_path.write_text(json.dumps({'mcpServers':{'studio':{'type':'stdio','command':sys.executable,
+            'args':[str(Path(__file__).with_name('studio_agent_tools.py')),'--context',str(context)]}}}),encoding='utf-8')
+    else:
+        previous = json.loads(context.read_text(encoding='utf-8'))
+        if previous.get('session') != session or Path(previous.get('checkout', '')).resolve() != Path(checkout).resolve():
+            raise ValueError('Saved Claude MCP scope does not match this checkout/session')
+    references = '' if resuming else reference_copies(bridge, checkout, session)
     receipt.update(branch=branch, stage='claude-ollama', status='Running',
                    sessionId=session, model=selected['model'], endpoint=selected['base_url'])
     bridge.save(receipt)  # Persist intent before starting; interrupted runs never redispatch.
@@ -117,13 +128,24 @@ def execute(bridge, checkout, receipt, branch):
                      'the operator still reviews results and applies changes. Never create/edit queue files yourself.\n')
     instructions += ('Read large design files in bounded sections. Implement and write code in small files or edits, '
                      'rather than producing the entire project in a single response. Keep the final report concise.\n')
+    instructions += ('When the operator must clarify a requirement, call studio_request_input with your specific question, '
+                     'then STOP using tools and finish your response. Wait for the next user message. '
+                     'Do not guess the answer or claim completion while a question is pending.\n')
+    if resuming:
+        instructions = ('Continue this SAME task and isolated checkout. Original task inputs and permissions still apply. '
+                        'Studio runs validation after the turn; never claim tests you did not run. '
+                        'If clarification is required, call studio_request_input and then stop.\n\nOperator message:\n' + resume_message)
+    else:
+        chat.start(session, instructions)
+    identity = ['--resume', session] if resuming else ['--session-id', session]
+    label = 'claude-turn-' + request_id if resuming else 'claude'
     result = bridge.command([executable, '-p', '--model', selected['model'],
         '--restricted', '--tools', tools, '--allowedTools', tools+',mcp__studio__*',
         '--permission-mode', 'acceptEdits', '--permission-prompts', 'none',
         '--setting-sources', '', '--settings', str(settings_path),
         '--strict-mcp-config', '--mcp-config', str(mcp_path),
-        '--session-id', session, '--output-format', 'json'],
-        'claude', checkout, extra_env=environment, input_text=instructions, check=False)
+        *identity, '--output-format', 'json'],
+        label, checkout, extra_env=environment, input_text=instructions, check=False)
     try:
         response = json.loads(result.stdout)
     except ValueError as error:
@@ -135,5 +157,16 @@ def execute(bridge, checkout, receipt, branch):
         raise ValueError('Claude Code exited with code '+str(result.returncode)+'; inspect the saved CLI result')
     if response.get('permission_denials'):
         raise ValueError('Claude Code reported denied tools; review the session before revalidating')
-    (bridge.path/'claude-result.md').write_text(str(response.get('result', '')), encoding='utf-8')
+    if response.get('session_id', response.get('sessionId', session)) != session:
+        raise ValueError('Claude Code returned a different session identity; inspect the saved session')
+    final = str(response.get('result', ''))
+    (bridge.path/'claude-result.md').write_text(final, encoding='utf-8')
+    chat.finish(final)
+    pending = chat.read().get('pendingQuestion')
+    if pending:
+        receipt.update(status='NeedsInput', stage='chat-input', question=pending['text'], error='')
     bridge.save(receipt)
+
+
+def context_exists(bridge):
+    return (bridge.path/'studio-tools-context.json').is_file() and (bridge.path/'claude-mcp.json').is_file() and (bridge.path/'claude-config').is_dir()

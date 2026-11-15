@@ -361,6 +361,8 @@ class Bridge:
         checkout = Path(receipt['checkout'])
         git = self.tool('git')
         self.execute_copilot(checkout, receipt, receipt['branch'])
+        if receipt.get('status') == 'NeedsInput':
+            return
         changed = self.command([git, 'status', '--porcelain', '--untracked-files=all'], 'local-status', checkout).stdout
         if changed.strip():
             self.command([git, 'add', '--all'], 'stage', checkout)
@@ -402,7 +404,7 @@ class Bridge:
             arguments.append('--allow-empty')
         self.command(arguments, label, checkout)
 
-    def finish_local_review(self, checkout, receipt):
+    def finish_local_review(self, checkout, receipt, allow_no_changes=False):
         from local_project import digest, safe_path
         git = self.tool('git')
         receipt.update(stage='local-validation', status='Running')
@@ -417,6 +419,10 @@ class Bridge:
         after = {name: digest(safe_path(checkout, name)) for name in names if name}
         changed = sorted(name for name in baseline.keys() | after.keys() if baseline.get(name) != after.get(name))
         if not changed:
+            if allow_no_changes:
+                receipt.update(status='NeedsInput', stage='chat-complete', validatedHead='',
+                               resultPath=str(self.path/'claude-result.md'), question='Chat response ready. You can continue this conversation.')
+                return
             raise ValueError(("Claude Code" if self.task["backend"] == "claude-ollama" else "Copilot") + " returned no local code changes")
         head = self.command([git, 'rev-parse', 'HEAD'], 'local-head', checkout).stdout.strip()
         patch = self.command([git, 'diff', '--binary', receipt['snapshotHead'], 'HEAD'], 'local-diff', checkout).stdout
@@ -576,7 +582,38 @@ class Bridge:
             raise ValueError('Merge the reviewed PR before completing this task and releasing dependent code tasks')
         return {'taskId': self.task['id'], 'status': 'Verified', 'validatedHead': receipt['validatedHead']}
 
-    def advance(self, approved=False, revalidate=False, bind_session=None, bind_pr=None, resume_tool=False):
+    def resume_chat(self, receipt):
+        from claude_ollama import execute
+        from task_chat import for_bridge
+        if (not receipt or self.task['backend'] != 'claude-ollama' or not receipt.get('sessionId')
+                or self.config.get('project_kind') != 'local'):
+            raise ValueError('Chat continuation requires an existing local Claude/Ollama task/session')
+        if receipt.get('localApplied') or self.task.get('status') in {'Completed','Cancelled','Paused'}:
+            raise ValueError('Create a new task/version for applied or completed changes; paused/cancelled tasks are preserved')
+        if receipt.get('status') not in {'AwaitingCodeReview','NeedsInput','Failed'} or receipt.get('chatRecoveryRequired'):
+            raise ValueError('Saved Claude execution is active or unresolved; reconcile its existing session first')
+        checkout = contained(receipt['checkout'], self.path)
+        if not (checkout/'.git').is_dir(): raise ValueError('The isolated working copy is missing')
+        request_id = self.task.get('chatRequestId', '')
+        chat = for_bridge(self)
+        message = chat.claim(request_id, receipt['sessionId'])
+        receipt.update(status='Running', stage='claude-ollama', error='', question='')
+        self.save(receipt)
+        try:
+            execute(self, checkout, receipt, receipt['branch'], resume_message=message, request_id=request_id)
+            changed = self.command([self.tool('git'), 'status', '--porcelain', '--untracked-files=all'], 'chat-status', checkout).stdout
+            if changed.strip():
+                self.command([self.tool('git'), 'add', '--all'], 'chat-stage', checkout)
+                self.local_commit(checkout, self.task['id'] + ': chat ' + request_id, 'chat-commit')
+            if receipt.get('status') != 'NeedsInput':
+                self.finish_local_review(checkout, receipt, allow_no_changes=True)
+        except Exception as error:
+            receipt.update(status='NeedsInput', error=str(error), question='Inspect the existing session and checkout before continuing.', chatRecoveryRequired=True)
+            chat.finish(error='Chat turn stopped: ' + str(error))
+        self.save(receipt)
+        return self.result(receipt)
+
+    def advance(self, approved=False, revalidate=False, bind_session=None, bind_pr=None, resume_tool=False, resume_chat=False):
         if not approved:
             return {"taskId": self.task["id"], "status": "WaitingForApproval", "backend": self.task["backend"],
                     "question": "Enable specialist/code backends before dispatching this task."}
@@ -586,6 +623,8 @@ class Bridge:
             receipt = read_json(self.receipt_path) if self.receipt_path.exists() else None
             if receipt and receipt.get("signature") != self.signature:
                 raise ValueError("Task inputs changed after dispatch; create a new task to preserve the original receipt")
+            if resume_chat:
+                return self.resume_chat(receipt)
             if resume_tool:
                 if not receipt or self.task['backend']!='pinokio':raise ValueError('No existing Pinokio task to resume')
                 ticket=read_json(self.path/'tool-call.json')
@@ -608,7 +647,7 @@ class Bridge:
                         raise ValueError('No existing local snapshot to revalidate')
                     try:
                         self.finish_local_review(checkout, receipt)
-                        receipt.update(error='')
+                        receipt.update(error='', chatRecoveryRequired=False)
                     except Exception as error:
                         receipt.update(status='Failed', error=str(error))
                     self.save(receipt)
@@ -662,6 +701,10 @@ class Bridge:
                 ambiguous = receipt["status"] in {"Dispatching", "Running"} and receipt.get("stage") in {"github-dispatch", "copilot-local", "claude-ollama", "publishing"}
                 receipt.update(status="NeedsInput" if ambiguous else "Failed", error=str(error),
                                question="Review the receipt and logs before retrying; no automatic redispatch occurs.")
+                if self.task['backend'] == 'claude-ollama' and receipt.get('sessionId'):
+                    from task_chat import for_bridge
+                    for_bridge(self).finish(error='Claude turn stopped: ' + str(error))
+                    if ambiguous: receipt['chatRecoveryRequired'] = True
             self.save(receipt)
             return self.result(receipt)
 
@@ -678,6 +721,7 @@ def main():
     parser.add_argument('--apply-local', action='store_true', help='Explicit approval to apply reviewed local folder changes')
     parser.add_argument('--expected-head', help='Reviewed code SHA required for local application')
     parser.add_argument('--resume-tool', action='store_true')
+    parser.add_argument('--resume-chat', action='store_true')
     parser.add_argument("--plan", action="store_true", help="Show backend/role without dispatch or filesystem writes")
     args = parser.parse_args()
     if args.apply_local and not args.verify_review:
@@ -687,7 +731,7 @@ def main():
         result = {"taskId": bridge.task["id"], "backend": bridge.task["backend"], "role": bridge.role,
                   "directory": str(bridge.directory), "projectId": bridge.task.get('projectId', ''),
                   "repository": bridge.config['repository'], "projectKind": bridge.config.get('project_kind', 'github'),
-                  "base_branch": bridge.config['base_branch']} if args.plan else (bridge.verify_review(args.apply_local, args.expected_head) if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool))
+                  "base_branch": bridge.config['base_branch']} if args.plan else (bridge.verify_review(args.apply_local, args.expected_head) if args.verify_review else bridge.advance(args.approve_dispatch, args.revalidate, args.bind_session, args.bind_pr, args.resume_tool, args.resume_chat))
         print(json.dumps(result))
         return 0
     except Exception as error:

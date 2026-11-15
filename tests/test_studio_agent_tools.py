@@ -150,7 +150,9 @@ class AgentToolsTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr)
         responses=[json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(len(responses),4)
-        self.assertEqual(len(responses[1]['result']['tools']),5)
+        self.assertEqual({tool['name'] for tool in responses[1]['result']['tools']},
+                         {'studio_request_input','studio_list_tools','studio_submit_tool',
+                          'studio_tool_status','studio_wait_tool','studio_copy_artifact'})
         self.assertTrue(responses[-1]['result']['isError'])
 
 

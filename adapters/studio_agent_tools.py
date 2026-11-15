@@ -18,6 +18,8 @@ from local_project import safe_path
 
 
 SCHEMAS = [
+    ('studio_request_input','Ask the operator a specific question. After this tool returns, stop all work and finish the response; wait for the operator answer.',
+     {'question':{'type':'string','minLength':1,'maxLength':8000}}),
     ('studio_list_tools','List registered Studio tool operations and their parameters.',{}),
     ('studio_submit_tool','Queue and start an installed Pinokio tool for this project. Reuse the same request_key when retrying.',
      {'request_key':{'type':'string'},'capability':{'type':'string'},'operation':{'type':'string'},
@@ -166,6 +168,24 @@ class StudioTools:
                     review_required=True,message='Copied to isolated checkout only; review code and tool output before applying to original project.')
 
     def call(self, name, args):
+        from task_chat import ChatStore, chat_base
+        chat = ChatStore(self.root, self.context['parent']['id'], chat_base(self.context['config'], self.root))
+        self.check_parent()
+        if name == 'studio_request_input':
+            pending = chat.question(self.context['session'], args.get('question'))
+            return dict(status='NeedsInput', question=pending['text'], question_id=pending['id'],
+                        instruction='STOP now. Do not call more tools or edit files. Finish your response and wait for the operator answer.')
+        if chat.read().get('pendingQuestion'):
+            raise ValueError('Awaiting operator answer. Stop and finish your response now.')
+        try:
+            result = self._call(name, args)
+        except Exception:
+            chat.tool_event(name, failed=True)
+            raise
+        chat.tool_event(name)
+        return result
+
+    def _call(self, name, args):
         self.check_parent()
         if name=='studio_list_tools':return self.catalog()
         if name=='studio_submit_tool':return self.submit(args)
