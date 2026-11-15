@@ -7,7 +7,7 @@ Copilot forbliver standard; automatisk kodevalg med `prefer-ollama` eller
 `ollama` alene er fortsat tekst-/planagenten.
 
 Valget i brugerfladen hedder **Foretræk Ollama / Claude Code**. Det fastholdes
-som en usikret formularændring indtil Gem, også når oversigten opdateres automatisk.
+som en ændring i formularen, indtil du gemmer, også når oversigten opdateres automatisk.
 Kodeopgaver med dette valg bruger `claude-ollama`; hvis den lokale kodeagent
 mangler, vises en blokering frem for at vælge Copilot. Planer overfører valget
 til deres kodeopgaver. Sætningen "foretræk Ollama" i en opgavebeskrivelse bruges
