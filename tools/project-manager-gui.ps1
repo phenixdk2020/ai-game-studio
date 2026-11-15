@@ -98,12 +98,13 @@ function Save-StudioForm {
         $task = [pscustomobject]@{id=('TASK-'+[guid]::NewGuid().ToString('N').Substring(0,20).ToUpper());status='Queued';priority=10;createdAt=[DateTime]::UtcNow.ToString('o')}
         $snapshot.Tasks = @($snapshot.Tasks + $task)
     }
-    foreach ($pair in @(@('title',$Title.Text),@('description',$Description.Text),@('agent',$Agent.Text),@('role',$Agent.Text),@('backend',[string]$Backend.SelectedItem),@('dependencies',@($Dependencies.Text -split '[,\s]+'|Where-Object {$_})),@('projectPath',$ProjectPath.Text),@('newProject',[bool]$NewProject.IsChecked),@('attachments',@($Attachments.Items)),@('updatedAt',[DateTime]::UtcNow.ToString('o')))) {
+    foreach ($pair in @(@('title',$Title.Text),@('description',$Description.Text),@('agent',$Agent.Text),@('role',$Agent.Text),@('backend',(Get-StudioFormBackend)),@('routingPreference',(Get-StudioAgentPreference)),@('routingPreference',(Get-StudioAgentPreference)),@('dependencies',@($Dependencies.Text -split '[,\s]+'|Where-Object {$_})),@('projectPath',$ProjectPath.Text),@('newProject',[bool]$NewProject.IsChecked),@('attachments',@($Attachments.Items)),@('updatedAt',[DateTime]::UtcNow.ToString('o')))) {
         $task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force
     }
     foreach($pair in @(@('toolCapability',$ToolCapability.Text),@('toolOperation',$ToolOperation.Text),@('toolAppId',$ToolAppId.Text),@('toolParameters',$toolArguments))){$task|Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force}
     $task | Add-Member -NotePropertyName projectId -NotePropertyValue ([string]$GameProject.SelectedValue) -Force
     Write-StudioQueue -Path $q -Items $snapshot.Tasks -ExpectedRevision $snapshot.Revision
+    $script:StudioPreferenceDirty=$false
     RefreshQ
     if($editTarget -and $editTarget.IsRevision){
         $Queue.SelectedItem=@($Queue.ItemsSource|Where-Object id -eq $task.id)[0]
@@ -121,7 +122,7 @@ function Assert-EditableTaskCurrent($displayed, $fresh) {
         if ($before -ne $current) { throw "Task input changed elsewhere ($name). Refresh before saving your edit." }
     }
 }
-function RefreshQ{foreach($control in @($ToolCapability,$ToolOperation,$ToolAppId,$ToolParameters)){if($control.IsKeyboardFocusWithin){return}};if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
+function RefreshQ{if($script:StudioPreferenceDirty){return};foreach($control in @($ToolCapability,$ToolOperation,$ToolAppId,$ToolParameters)){if($control.IsKeyboardFocusWithin){return}};if($Title.IsKeyboardFocusWithin -or $Description.IsKeyboardFocusWithin -or $ProjectPath.IsKeyboardFocusWithin -or $Agent.IsKeyboardFocusWithin -or $Backend.IsKeyboardFocusWithin -or $Dependencies.IsKeyboardFocusWithin){return};$id=if($Queue.SelectedItem){$Queue.SelectedItem.id}else{$null};$items=@(ReadQ|Sort-Object priority);$Queue.ItemsSource=$null;$Queue.ItemsSource=$items;if($id){$Queue.SelectedItem=$items|?{$_.id-eq$id}|Select-Object -First 1};if($script:worker-and!$script:worker.HasExited){$WorkerState.Text="WORKER KØRER  PID $($script:worker.Id)";$WorkerBtn.Content='Stop worker'}else{$WorkerState.Text='WORKER STOPPET';$WorkerBtn.Content='Start worker'}}
 function ClearForm{$GameProject.SelectedIndex=-1;$Title.Text='';$Description.Text='';$Agent.Text='auto';$ProjectPath.Text='';$NewProject.IsChecked=$false;$Attachments.Items.Clear();$Question.Text='';$Feedback.Text=''}
 function MoveTask([int]$d){$t=$Queue.SelectedItem;if(!$t){return};$a=@(ReadQ|Sort-Object priority);$sel=$a|?{$_.id-eq$t.id}|Select-Object -First 1;if(!$sel){return};$i=[array]::IndexOf($a,$sel);$n=$i+$d;if($n-lt 0-or$n-ge$a.Count){return};$tmp=$a[$i];$a[$i]=$a[$n];$a[$n]=$tmp;for($j=0;$j-lt$a.Count;$j++){$a[$j].priority=$j+1};WriteQ $a;RefreshQ}
 function PaintPipeline($t){

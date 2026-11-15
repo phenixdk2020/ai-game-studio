@@ -226,6 +226,14 @@ class LocalProjectsTests(unittest.TestCase):
         self.assertEqual(task['backend'], 'copilot-local')
         self.assertEqual(task['projectId'], 'localgame')
 
+    def test_local_plan_keeps_ollama_preference_for_coding_children(self):
+        self.task.update(backend='ollama',kind='plan',role='project_manager',routingPreference='prefer-ollama')
+        plan={'tasks':[dict(key='code',title='Code game',description='Add score',role='gameplay',backend='copilot-local')]}
+        bridge=Bridge(self.task,self.config,http=lambda payload:{'choices':[{'message':{'content':json.dumps(plan)}}]})
+        self.assertEqual(bridge.advance(True)['status'],'AwaitingPlanReview')
+        child=json.loads((bridge.path/'plan.json').read_text())['tasks'][0]
+        self.assertEqual(child['backend'],'claude-ollama')
+
     def test_snapshot_ignores_caches_secrets_and_retains_nested_state_code(self):
         (self.source/'node_modules').mkdir()
         (self.source/'node_modules/cache').write_text('cache')

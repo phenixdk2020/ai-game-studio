@@ -51,7 +51,13 @@ class GuiViewTests(unittest.TestCase):
                 "$binding=@($source|Where-Object { $_.StartsWith('$SaveVersionBtn.Add_Click') }); "
                 "if($binding.Count -ne 1){throw 'New version handler missing'}; Invoke-Expression $binding[0]; "
                 "$SaveVersionBtn.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))); "
-                "if(-not $script:versionRequested){throw 'Button did not request a new version'}; $window.Close()"
+                "if(-not $script:versionRequested){throw 'Button did not request a new version'}; "
+                "$GameProject=[pscustomobject]@{SelectedValue='test'};$Title.Text='Plan';$Description.Text='Game design'; "
+                "$AgentPreference.SelectedItem=@($AgentPreference.Items|Where-Object Tag -eq 'prefer-ollama')[0]; "
+                "function RefreshQ {}; "
+                "function New-StudioTask {param($Root,$Title,$Description,$Backend,$Role,$Kind,$RoutingPreference,$Attachments,$ProjectPath,$ProjectId);$script:planPreference=$RoutingPreference}; "
+                "$planButton.RaiseEvent((New-Object Windows.RoutedEventArgs ([Windows.Controls.Button]::ClickEvent))); "
+                "if($script:planPreference -ne 'prefer-ollama'){throw 'Plan dropped local coding preference'}; $window.Close()"
             )
             result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", command],
                                     capture_output=True, timeout=30)

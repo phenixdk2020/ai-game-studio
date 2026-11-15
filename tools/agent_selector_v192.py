@@ -134,9 +134,17 @@ def classify_need(task):
     return 'general'
 
 
+def routing_preference(task):
+    value=str(task.get('routingPreference') or 'auto').strip().lower() or 'auto'
+    if value=='auto' and re.search(r'\b(?:foretræk|foretraek|brug)\s+(?:lokal\s+)?ollama\b',
+                                  str(task.get('title',''))+' '+str(task.get('description','')),re.I):
+        return 'prefer-ollama'
+    return value
+
+
 def eligible(task, items):
     need=classify_need(task)
-    pref=str(task.get('routingPreference') or 'auto').strip().lower() or 'auto'
+    pref=routing_preference(task)
     gate={'specific-tool':{'pinokio'}, '3d':{'asset3d','pinokio'},
           'research':{'copilot-local','historian-web'}, 'code':{'copilot-local','claude-ollama','copilot-github'},
           'plan':{'ollama','copilot-local'}, 'general':set(BACKENDS)}[need]
@@ -146,6 +154,9 @@ def eligible(task, items):
         # Don't route tool-specific work (e.g. 3D) to a coding agent.
         pass
     elif pref == 'prefer-ollama':
+        if need == 'code': gate &= {'claude-ollama'}
+        elif need == 'plan': gate &= {'ollama'}
+        elif need == 'general': gate &= {'ollama','claude-ollama'}
         # Research still needs a source-backed search backend; plain Ollama cannot browse.
         if need == 'research': gate &= {'historian-web'}
     elif pref != 'auto':
@@ -203,7 +214,7 @@ def fallback(need, available, preference='auto'):
 
 def select(root, task, *, ai=None, availability=None, history=None, ollama=None):
     root=Path(root).resolve()
-    preference=str(task.get('routingPreference') or 'auto').strip().lower() or 'auto'
+    preference=routing_preference(task)
     ollama_state,ollama_issue=ollama if ollama is not None else local_ollama(root)
     found=availability if availability is not None else candidates(root,ollama_state)
     hist=history if history is not None else empirical_history(root)
@@ -214,6 +225,9 @@ def select(root, task, *, ai=None, availability=None, history=None, ollama=None)
             'candidates':found,'eligible':sorted(avail_ids),
             'history':hist,'confidence':0.0,'ranking':[]}
     if not usable:
+        if preference=='prefer-ollama' and need in ('code','plan','general'):
+            result['reason']='Lokal Ollama/Claude Code er valgt, men den lokale agent er ikke klar. Kontroller Ollama, den konfigurerede model og Claude Code. Copilot er ikke valgt som fallback.'
+            return result
         result['reason']=(
             'Ingen passende og tilgaengelig backend. Denne opgavetype kraever en egnet integration. '
             'Til kodeopgaver kraeves Claude Code med Ollama, Copilot CLI eller GitHub/Copilot-adgang; Ollama tekstchat kan ikke alene rette projektfiler. '
@@ -223,11 +237,15 @@ def select(root, task, *, ai=None, availability=None, history=None, ollama=None)
     # Feature-specific tools are routed by their verified capability. For software
     # development, prefer Copilot over the small local LLM, irrespective of Ollama advice.
     # The available executable alone does not prove authentication: dispatch may still fail.
-    if need in ('code','research','plan') or preference=='prefer-copilot' and need == 'general':
+    if need in ('code','research','plan') or preference in ('prefer-copilot','prefer-ollama') and need == 'general':
         chosen=fallback(need,avail_ids,preference)
         result.update(mode='capability-priority',backend=chosen,confidence=0.75,
                       reason=('Copilot CLI prioriteres til kildebaseret webresearch; login, webadgang og kildegrundlag verificeres ved udførsel.' if need=='research' and chosen=='copilot-local' else 'Kildebaseret research er valgt som fallback.' if need=='research' and chosen=='historian-web' else 'Copilot prioriteres til kode og planlægning; login verificeres ved udførsel.' if chosen and chosen.startswith('copilot') else 'Opgavekrav afgraenser valget og eventuel fallback.'),
                       ranking=[chosen] if chosen else [])
+        if chosen=='claude-ollama':
+            result['reason']='Claude Code bruger den lokale Ollama-model til at redigere projektkopien; Studio koerer testene.'
+        elif chosen=='ollama' and preference=='prefer-ollama':
+            result['reason']='Lokal Ollama er valgt til planlaegning eller tekst efter brugerens indstilling.'
         return result
     if len(usable)==1:
         chosen=usable[0]['backend']

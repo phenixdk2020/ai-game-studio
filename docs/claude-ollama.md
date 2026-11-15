@@ -6,6 +6,13 @@ Copilot forbliver standard; automatisk kodevalg med `prefer-ollama` eller
 `offline-only` kan vælge Claude, når CLI og den konfigurerede model findes.
 `ollama` alene er fortsat tekst-/planagenten.
 
+Valget i brugerfladen hedder **Foretræk Ollama / Claude Code**. Det fastholdes
+som en usikret formularændring indtil Gem, også når oversigten opdateres automatisk.
+Kodeopgaver med dette valg bruger `claude-ollama`; hvis den lokale kodeagent
+mangler, vises en blokering frem for at vælge Copilot. Planer overfører valget
+til deres kodeopgaver. Sætningen "foretræk Ollama" i en opgavebeskrivelse bruges
+også som lokalt valg, når ingen anden AI-strategi er valgt eksplicit.
+
 Konfigurer i `config/orchestrator.json`:
 
 ```json

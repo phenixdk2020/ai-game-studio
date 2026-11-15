@@ -6,6 +6,7 @@ function New-StudioTask {
           [ValidateSet('auto','asset3d','ollama','copilot-local','copilot-github','claude-ollama','pinokio')][string]$Backend='auto',
           [string]$Role='project_manager', [string[]]$Attachments=@(), [string]$ProjectPath='', [string]$ProjectId='',
           [string[]]$Dependencies=@(), [ValidateSet('task','plan')][string]$Kind='task',
+          [ValidateSet('auto','prefer-ollama','prefer-copilot','offline-only')][string]$RoutingPreference='auto',
           [string]$ToolCapability='', [string]$ToolOperation='', $ToolParameters=@{}, [string]$ToolAppId='')
     $path = Join-Path $Root 'tasks/queue.gui.json'
     $snapshot = Get-StudioQueueSnapshot -Path $path
@@ -17,7 +18,7 @@ function New-StudioTask {
         schemaVersion=1; id=('TASK-'+[guid]::NewGuid().ToString('N').Substring(0,20).ToUpper())
         title=$Title; description=$Description; backend=$Backend; role=$Role; agent=$Role
         attachments=@($Attachments); projectPath=$ProjectPath; projectId=$ProjectId; dependencies=@($Dependencies)
-        kind=$Kind; status='Queued'; priority=10; createdAt=[DateTime]::UtcNow.ToString('o')
+        kind=$Kind; routingPreference=$RoutingPreference; status='Queued'; priority=10; createdAt=[DateTime]::UtcNow.ToString('o')
         toolCapability=$ToolCapability;toolOperation=$ToolOperation;toolParameters=$ToolParameters;toolAppId=$ToolAppId
     }
     $null = New-Item -ItemType Directory -Force -Path (Split-Path $path)
@@ -28,6 +29,14 @@ function New-StudioTask {
 function Get-StudioBackend {
     param($Task, [string]$Root=(Split-Path $PSScriptRoot -Parent))
     if ($Task.backend -and $Task.backend -ne 'auto') { return [string]$Task.backend }
+    if($Task.routingPreference -and $Task.routingPreference -ne 'auto'){
+        $payload=ConvertTo-Json -InputObject $Task -Depth 30 -Compress
+        $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+        $output=@(& python (Join-Path $Root 'tools/agent_selector_v192.py') --root $Root --task-b64 $encoded)
+        $decision=($output -join "`n")|ConvertFrom-Json
+        if($LASTEXITCODE -ne 0 -or -not $decision.backend){throw ('Agentvalg blokeret: '+$decision.reason)}
+        return [string]$decision.backend
+    }
     if ($Task.toolCapability) { return 'pinokio' }
     if ($Task.kind -eq 'plan') { return 'ollama' }
     $codeBackend='copilot-local'

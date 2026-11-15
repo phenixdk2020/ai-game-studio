@@ -22,9 +22,11 @@ from studio_projects import project_config
 BACKENDS = {"ollama", "copilot-local", "copilot-github", "claude-ollama", "pinokio"}
 PROTECTED = {"tasks", "results", "logs", "state"}
 
-def code_backend(config):
+def code_backend(config, task=None):
     value=config.get('default_code_backend','copilot-local')
     if value not in {'copilot-local','copilot-github','claude-ollama'}:raise ValueError('Invalid default_code_backend')
+    if task and task.get('routingPreference') in {'prefer-ollama','offline-only'}:
+        return 'claude-ollama'
     return value
 
 
@@ -222,7 +224,7 @@ class Bridge:
         if planning:
             instructions += ('\nReturn only JSON {"tasks":[{"key":"step1","title":"...","description":"...",'
                 '"role":"project_manager","backend":"ollama","dependencies":[]}]}. '
-                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/pinokio or the configured code backend '+code_backend(self.config)+'. All coding tasks must use '+code_backend(self.config)+'. For pinokio tasks include toolCapability, toolOperation and toolParameters. '
+                'Use 1..12 tasks, acyclic dependency keys, explicit backends ollama/asset3d/pinokio or the configured code backend '+code_backend(self.config, self.task)+'. All coding tasks must use '+code_backend(self.config, self.task)+'. For pinokio tasks include toolCapability, toolOperation and toolParameters. '
                 'Do not claim execution. Allowed roles: ' + ", ".join(self.config["roles"]))
         answer = self.http({"model": model, "temperature": 0.2, "messages": [
             {"role": "system", "content": instructions}, {"role": "user", "content": self.source["description"]}]})
@@ -231,7 +233,7 @@ class Bridge:
             raise ValueError("Empty model result")
         if planning:
             plan = normalize_plan(content, self.task["id"], self.source, self.config["roles"],
-                                  'copilot-local' if self.config.get('project_kind') == 'local' and code_backend(self.config) == 'copilot-github' else code_backend(self.config))
+                                  'copilot-local' if self.config.get('project_kind') == 'local' and code_backend(self.config, self.task) == 'copilot-github' else code_backend(self.config, self.task))
             target = self.path / "plan.json"
             write_json(target, plan)
         else:
