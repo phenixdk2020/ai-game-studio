@@ -147,6 +147,7 @@ def reason(task, receipt, state):
     if task.get('status') in {'Paused', 'Cancelled'}: return 'Task is paused or cancelled; its state is preserved.'
     if not receipt.get('sessionId'): return 'Save and start this task first to create its Claude session.'
     if receipt.get('status') not in SEND_STATUSES:
+        if task.get('status') == 'Running': return 'Claude is working on this task. Wait for the response.'
         return 'The saved Claude execution is still active or unresolved. Inspect its existing session first.'
     if state.get('activeTurn'): return 'A chat turn is queued or running. Wait for it to finish.'
     if task.get('status') not in SEND_STATUSES: return 'Task is running or not ready for a chat continuation.'
