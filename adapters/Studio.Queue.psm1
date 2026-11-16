@@ -19,7 +19,7 @@
             attachments = @(); dependencies = @(); priority = 10
             attempt = 0; maxAttempts = 3; progressPercent = 0; progressText = ''
             pipelineStage = ''; error = ''; resultPath = ''
-            backend = 'auto'; role = ''; kind = 'task'; projectPath = ''
+            backend = 'auto'; role = ''; kind = 'task'; projectPath = ''; projectId = ''
             toolCapability='';toolOperation='';toolAppId='';toolParameters=@{}
         }
         foreach ($mapping in @(@('references','attachments'), @('dependsOn','dependencies'), @('result_file','resultPath'), @('lastError','error'))) {
@@ -145,7 +145,7 @@ function Merge-StudioWorkerUpdate {
         if ($latest.status -in @('Cancelled', 'Paused') -and $latest.status -ne $old.status) {
             throw "Queue conflict: task $id was paused or cancelled. Worker update stopped."
         }
-        foreach ($name in @('title','description','attachments','projectPath','agent','newProject','backend','role','kind','dependencies','toolCapability','toolOperation','toolAppId','toolParameters')) {
+        foreach ($name in @('title','description','attachments','projectPath','projectId','agent','newProject','backend','role','kind','dependencies','toolCapability','toolOperation','toolAppId','toolParameters')) {
             if ((Get-StudioPropertyJson $latest $name) -ne (Get-StudioPropertyJson $old $name)) {
                 throw "Queue conflict: task $id input changed ($name). Reload before continuing."
             }

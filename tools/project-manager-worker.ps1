@@ -108,6 +108,7 @@ function Invoke-SpecialistTask {
     $arguments = @((Join-Path $Root 'adapters\project_bridge.py'), $taskFile, '--config', $OrchestratorConfig, '--approve-dispatch')
     if ($Task.bridgeAction -eq 'revalidate') { $arguments += '--revalidate' }
     if ($Task.bridgeAction -eq 'resume-tool') { $arguments += '--resume-tool' }
+    if ($Task.bridgeAction -eq 'resume-chat') { $arguments += '--resume-chat' }
     $lines = @(& $Python @arguments)
     $response = ($lines -join "`n") | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw $response.error }

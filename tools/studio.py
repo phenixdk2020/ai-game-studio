@@ -20,7 +20,7 @@ def main(argv=None):
         command = commands.add_parser(action)
         command.add_argument('title')
         command.add_argument('--description', default='')
-        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github','pinokio'), default='auto')
+        command.add_argument('--backend', choices=('auto','asset3d','ollama','copilot-local','copilot-github','claude-ollama','pinokio'), default='auto')
         command.add_argument('--tool',default='')
         command.add_argument('--operation',default='')
         command.add_argument('--parameters-json',default='{}')
@@ -29,6 +29,7 @@ def main(argv=None):
         command.add_argument('--attachment', action='append', default=[])
         command.add_argument('--depends-on', action='append', default=[])
         command.add_argument('--project', default='')
+        command.add_argument('--project-id', default='')
     command = commands.add_parser('approve'); command.add_argument('id')
     command = commands.add_parser('resume-tool'); command.add_argument('id')
     command = commands.add_parser('import-legacy'); command.add_argument('source'); command.add_argument('--apply', action='store_true')
@@ -45,7 +46,7 @@ def main(argv=None):
         args.update(toolCapability=args.pop('tool'),toolOperation=args.pop('operation'),toolParameters=parameters,toolAppId=args.pop('app_id'))
         args.update(action='add', kind='plan' if action=='plan' else 'task',
             description=args['description'] or args['title'], attachments=args.pop('attachment'),
-            dependencies=args.pop('depends_on'), projectPath=args.pop('project'))
+            dependencies=args.pop('depends_on'), projectPath=args.pop('project'), projectId=args.pop('project_id'))
         if action=='plan': args.update(backend='ollama', role='project_manager')
     if action in ('run','run-all'):
         args.update(action='run', loop=action=='run-all', validateUnreal=args.pop('validate_unreal'))
