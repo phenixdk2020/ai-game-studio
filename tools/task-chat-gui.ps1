@@ -25,22 +25,22 @@ function Quote-Arg([string]$s){'"'+($s -replace '(\\*)"','$1$1\"' -replace '(\\+
 function Start-ChatCli([string]$kind,[string]$messagePath='') {
  if($script:proc -and -not $script:proc.HasExited){return}
  if(!(Test-Path -LiteralPath $chatTool -PathType Leaf)){throw "Chat-backend mangler: $chatTool"}
- $python=Resolve-Python;$script:output=[IO.Path]::GetTempFileName();$script:errorFile=[IO.Path]::GetTempFileName()
+ $python=Resolve-Python
  $args=@($chatTool,'--root',$Root,'--task-id',$taskChatId,$kind)
  if($kind -eq 'send'){$args+=@('--message-file',$messagePath,'--request-id',$script:pendingRequestId)}
  $argLine=($args|ForEach-Object {Quote-Arg ([string]$_)}) -join ' '
  $psi=New-Object Diagnostics.ProcessStartInfo;$psi.FileName=$python;$psi.Arguments=$argLine;$psi.WorkingDirectory=$Root;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
- $script:proc=New-Object Diagnostics.Process;$script:proc.StartInfo=$psi;$script:outDrained=$false;$script:errDrained=$false
- $script:proc.add_OutputDataReceived({param($s,$e) if($null -ne $e.Data){[IO.File]::AppendAllText($script:output,$e.Data+[Environment]::NewLine,[Text.Encoding]::UTF8)}else{$script:outDrained=$true}})
- $script:proc.add_ErrorDataReceived({param($s,$e) if($null -ne $e.Data){[IO.File]::AppendAllText($script:errorFile,$e.Data+[Environment]::NewLine,[Text.Encoding]::UTF8)}else{$script:errDrained=$true}})
- [void]$script:proc.Start();$script:proc.BeginOutputReadLine();$script:proc.BeginErrorReadLine();$script:pollKind=$kind;$script:busy=$true
+ $script:proc=New-Object Diagnostics.Process;$script:proc.StartInfo=$psi
+ # Read output with .NET tasks: PowerShell event handlers would run on thread-pool threads without a runspace and crash the process.
+ $psi.StandardOutputEncoding=[Text.Encoding]::UTF8;$psi.StandardErrorEncoding=[Text.Encoding]::UTF8
+ [void]$script:proc.Start();$script:outTask=$script:proc.StandardOutput.ReadToEndAsync();$script:errTask=$script:proc.StandardError.ReadToEndAsync();$script:pollKind=$kind;$script:busy=$true
  $StatusLine.Text=if($kind -eq 'send'){'Sender besked…'}else{'Opdaterer historik…'}
  if($kind -eq 'send'){$SendBtn.IsEnabled=$false;$Message.IsEnabled=$false}
 }
 function Read-ChatResult {
- if(!$script:proc -or -not $script:proc.HasExited -or !$script:outDrained -or !$script:errDrained){return}
- $kind=$script:pollKind;$json=if(Test-Path $script:output){Get-Content -LiteralPath $script:output -Raw -Encoding UTF8}else{''};$stderr=if(Test-Path $script:errorFile){Get-Content -LiteralPath $script:errorFile -Raw -Encoding UTF8}else{''}
- Remove-Item -LiteralPath $script:output,$script:errorFile -Force -ErrorAction SilentlyContinue;$script:proc=$null;$script:busy=$false
+ if(!$script:proc -or -not $script:proc.HasExited -or !$script:outTask.IsCompleted -or !$script:errTask.IsCompleted){return}
+ $kind=$script:pollKind;$json=if($script:outTask.Status -eq 'RanToCompletion'){[string]$script:outTask.Result}else{''};$stderr=if($script:errTask.Status -eq 'RanToCompletion'){[string]$script:errTask.Result}else{''}
+ $script:proc.Dispose();$script:proc=$null;$script:outTask=$null;$script:errTask=$null;$script:busy=$false
  if($kind -eq 'send'){$SendBtn.IsEnabled=$true;$Message.IsEnabled=$true}
  try{$v=$json|ConvertFrom-Json -ErrorAction Stop;if(!$v.ok){throw ([string]$v.error)}}catch{$ErrorText.Text=if($stderr){$stderr.Trim()}elseif($_.Exception.Message){$_.Exception.Message}else{'Chat-backend returnerede et ugyldigt svar.'};$StatusLine.Text='Fejl';return}
  $ErrorText.Text=''
